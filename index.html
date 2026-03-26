@@ -336,30 +336,43 @@ async function mcFetch(path, opts={}){
 // Fetch all active workflow task lists, then fan out per workflow document
 async function fetchMCWorkflowTasks(){
   // Step 1: get all active workflows
-  const wfList = await mcFetch(MC_ENDPOINTS.workflows);
-  const workflows = Array.isArray(wfList) ? wfList : (wfList.items || wfList.results || []);
+  const wfRaw = await mcFetch(MC_ENDPOINTS.workflows);
+  _diag['1_workflows_raw'] = wfRaw;
+
+  const workflows = Array.isArray(wfRaw) ? wfRaw : (wfRaw.items || wfRaw.results || wfRaw.data || []);
+  _diag['2_workflows_parsed'] = { count: workflows.length, firstItem: workflows[0] || null };
 
   // Step 2: for each workflow, get its tasks (fan-out, max 40 concurrent)
   const BATCH = 40;
   const allTasks = [];
+  const taskSamples = [];
+
   for(let i=0; i<workflows.length; i+=BATCH){
     const batch = workflows.slice(i, i+BATCH);
     const results = await Promise.allSettled(
       batch.map(wf => {
-        const docNum = wf.documentNumber || wf.id || wf.formNumber || '';
+        const docNum = wf.documentNumber || wf.formNumber || wf.number || wf.id || '';
         return mcFetch(MC_ENDPOINTS.workflowTasks + encodeURIComponent(docNum))
-          .then(data => ({wf, data}))
-          .catch(() => null);
+          .then(data => ({wf, data, docNum}))
+          .catch(err => ({ wf, error: err.message, docNum }));
       })
     );
     results.forEach(r => {
       if(r.status==='fulfilled' && r.value){
-        const {wf, data} = r.value;
-        const tasks = Array.isArray(data) ? data : (data.items || data.tasks || data.results || []);
+        const {wf, data, error, docNum} = r.value;
+        if(error){
+          if(taskSamples.length < 3) taskSamples.push({ docNum, error });
+          return;
+        }
+        if(taskSamples.length < 3) taskSamples.push({ docNum, rawResponse: data });
+        const tasks = Array.isArray(data) ? data : (data.items || data.tasks || data.results || data.data || []);
         tasks.forEach(t => allTasks.push(mapMCWorkflowTask(t, wf)));
       }
     });
   }
+
+  _diag['3_workflow_task_samples'] = taskSamples;
+  _diag['4_total_wf_tasks_mapped'] = allTasks.length;
   return { workflows, wfTasks: allTasks };
 }
 
@@ -404,6 +417,24 @@ function mapMCDocTask(d){
   };
 }
 
+// ─────────────────────────────────────────────
+// DIAGNOSTIC  —  open browser console or click "Debug last sync" in the error banner
+// ─────────────────────────────────────────────
+let _diag = {};   // stores raw API responses for inspection
+
+function showDiag(){
+  const w = window.open('','_blank','width=900,height=600');
+  w.document.write(`<html><head><title>MC API Diagnostic</title>
+  <style>body{font-family:monospace;font-size:12px;padding:16px;background:#1a1a18;color:#e8e6e0}
+  h3{color:#60a5d8;margin:14px 0 4px}pre{background:#252523;padding:12px;border-radius:6px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:#c2c0b6}</style></head><body>`);
+  w.document.write('<h2 style="color:#e8e6e0">MC API Diagnostic</h2>');
+  w.document.write('<p style="color:#9b9a94">This shows the raw responses from each MasterControl endpoint. Share this with your developer if tasks are missing.</p>');
+  Object.entries(_diag).forEach(([key, val]) => {
+    w.document.write(`<h3>${key}</h3><pre>${JSON.stringify(val, null, 2)}</pre>`);
+  });
+  w.document.write('</body></html>');
+}
+
 // Main sync function
 async function syncMasterControl(){
   if(!state.settings.mcUrl || !state.settings.mcToken){
@@ -412,6 +443,7 @@ async function syncMasterControl(){
   }
   state.syncing = true;
   state.syncError = null;
+  _diag = {};
   render();
 
   try{
@@ -422,6 +454,8 @@ async function syncMasterControl(){
 
     const wf = wfResult.status==='fulfilled' ? wfResult.value : { workflows:[], wfTasks:[] };
     const docs = docTasks.status==='fulfilled' ? docTasks.value : [];
+
+    _diag['5_merged_task_count'] = { docTasksFound: docs.length, wfTasksFound: wf.wfTasks.length };
 
     // Merge: doc tasks and workflow tasks, dedup by id
     const seen = new Set();
@@ -664,8 +698,9 @@ function renderTeam(){
     </div>
   </div>
 
-  ${state.syncError ? `<div class="alert alert-warn">${state.syncError}</div>` : ''}
+  ${state.syncError ? `<div class="alert alert-warn">${state.syncError} <button class="btn btn-sm" style="margin-left:8px" onclick="showDiag()">Debug last sync ↗</button></div>` : ''}
   ${state.lastSync==='demo mode' ? `<div class="alert alert-info">Showing demo data. Add your MC API token in Settings to load live data.</div>` : ''}
+  ${state.lastSync && state.lastSync!=='demo mode' && !state.syncError ? `<div class="alert alert-info" style="display:flex;align-items:center;gap:10px">Live MC data loaded. If tasks are missing, check field mapping. <button class="btn btn-sm" onclick="showDiag()">Debug API responses ↗</button></div>` : ''}
 
   <div class="status-bar">
     <div class="status-item">
