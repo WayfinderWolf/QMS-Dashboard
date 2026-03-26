@@ -329,15 +329,26 @@ async function mcFetch(path, opts={}){
     ...opts,
     headers:{ 'Authorization':'Bearer '+state.settings.mcToken, 'Content-Type':'application/json', ...(opts.headers||{}) },
   });
-  if(!res.ok) throw new Error(`MC ${res.status}: ${path}`);
+  if(!res.ok){
+    let body = '';
+    try{ body = await res.text(); }catch(_){}
+    _diag['HTTP_ERROR'] = { status: res.status, path, body: body.slice(0,500) };
+    throw new Error(`MC ${res.status}: ${path}`);
+  }
   return res.json();
 }
 
 // Fetch all active workflow task lists, then fan out per workflow document
 async function fetchMCWorkflowTasks(){
   // Step 1: get all active workflows
-  const wfRaw = await mcFetch(MC_ENDPOINTS.workflows);
-  _diag['1_workflows_raw'] = wfRaw;
+  let wfRaw;
+  try {
+    wfRaw = await mcFetch(MC_ENDPOINTS.workflows);
+    _diag['1_workflows_raw'] = wfRaw;
+  } catch(e) {
+    _diag['1_workflows_raw'] = { FETCH_ERROR: e.message, url: (state.settings.mcUrl||'') + MC_ENDPOINTS.workflows };
+    return { workflows: [], wfTasks: [] };
+  }
 
   const workflows = Array.isArray(wfRaw) ? wfRaw : (wfRaw.items || wfRaw.results || wfRaw.data || []);
   _diag['2_workflows_parsed'] = { count: workflows.length, firstItem: workflows[0] || null };
@@ -475,6 +486,7 @@ async function syncMasterControl(){
     snapshotHistory();
     persist();
   }catch(e){
+    _diag['ERROR'] = { message: e.message, stack: e.stack };
     state.syncError = 'Sync failed: '+e.message+'. Check URL, token, and CORS settings.';
   }
 
