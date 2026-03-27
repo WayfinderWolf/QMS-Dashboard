@@ -1005,7 +1005,8 @@ function normName(n){ return (n||'').toLowerCase().replace(/\s+/g,' ').trim(); }
 function isOverdue(t){
   if(t.status==='completed') return false;
   const now=new Date(); now.setHours(0,0,0,0);
-  return t.dueDate && new Date(t.dueDate)<now;
+  const d = t.dueDate || t.plannedStart;
+  return d && new Date(d)<now;
 }
 
 function normalizeStatus(s){
@@ -1238,46 +1239,27 @@ function getUpcomingTasks(){
   const now = new Date(); now.setHours(0,0,0,0);
   const fwd = new Date(now); fwd.setDate(fwd.getDate()+14);
 
+  // Best available date: dueDate first, then plannedStart
+  const taskDate = t => t.dueDate || t.plannedStart || null;
+
   const tasks = allTasks().filter(t=>{
     if(t.status==='completed') return false;
-
-    // Always include overdue items (have a dueDate in the past)
-    if(t.dueDate && new Date(t.dueDate) < now) return true;
-
-    // Include WF tasks/issues with a plannedStart in the next 14 days
-    if(t.plannedStart){
-      const d = new Date(t.plannedStart);
-      return d >= now && d < fwd;
-    }
-
-    // Include tasks with a dueDate in the next 14 days
-    if(t.dueDate){
-      const d = new Date(t.dueDate);
-      return d >= now && d < fwd;
-    }
-
-    // Do NOT include tasks where only queuedDate exists — that's an entry date,
-    // not a due date, and would flood the panel with every MC task
-    return false;
+    const d = taskDate(t);
+    if(!d) return false;
+    const dt = new Date(d);
+    // Include overdue (any date-bearing task past due) and upcoming within 14 days
+    return dt < fwd;
   });
 
-  // Debug: log what allTasks sees
-  const _all = allTasks().filter(t=>t.status!=='completed');
-  console.log('getUpcomingTasks: total active tasks', _all.length);
-  console.log('  with dueDate:', _all.filter(t=>t.dueDate).length);
-  console.log('  with plannedStart:', _all.filter(t=>t.plannedStart).length);
-  console.log('  sample dates:', _all.filter(t=>t.dueDate).slice(0,3).map(t=>({title:t.title.slice(0,30),dueDate:t.dueDate,source:t.source})));
-  console.log('  upcoming filtered:', tasks.length);
-
-  // Sort: overdue first (by dueDate asc), then upcoming (by dueDate/plannedStart asc)
+  // Sort: overdue first, then by date ascending
   return tasks.sort((a,b)=>{
-    const aOD = a.dueDate && new Date(a.dueDate) < now;
-    const bOD = b.dueDate && new Date(b.dueDate) < now;
+    const aDate = new Date(taskDate(a)||0);
+    const bDate = new Date(taskDate(b)||0);
+    const aOD = aDate < now;
+    const bOD = bDate < now;
     if(aOD && !bOD) return -1;
     if(!aOD && bOD) return 1;
-    const da = new Date(a.dueDate||a.plannedStart||0);
-    const db = new Date(b.dueDate||b.plannedStart||0);
-    return da - db;
+    return aDate - bDate;
   }).slice(0, 20);
 }
 
