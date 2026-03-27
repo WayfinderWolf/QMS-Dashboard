@@ -287,6 +287,7 @@ let state = {
   selectedMember:null,
   syncing:false,
   period:'current',  // 'current' | '30d' | '90d' | 'all'
+  teamFilter:{ source:'', workflow:'', wfSource:'' },
 };
 
 // ─────────────────────────────────────────────
@@ -297,6 +298,12 @@ function loadState(){
     const s = localStorage.getItem('qms_v3');
     if(s) Object.assign(state, JSON.parse(s));
   }catch(e){}
+
+  // Purge demo history snapshots if real data exists
+  if(state.lastSync && state.lastSync !== 'demo mode'){
+    state.history = state.history.filter(h => h.real);
+  }
+
   if(!state.mcData) injectMockData();
 }
 function persist(){ try{ localStorage.setItem('qms_v3', JSON.stringify(state)); }catch(e){} }
@@ -967,6 +974,18 @@ function periodLabel(){
 
 function setPeriod(p){ state.period = p; render(); }
 
+function setTeamFilter(key, val){ state.teamFilter[key] = val; render(); }
+
+function getTeamFilteredTasks(){
+  const f = state.teamFilter;
+  return getUpcomingTasks().filter(t => {
+    if(f.source && t.source !== f.source) return false;
+    if(f.workflow && t.workflow !== f.workflow) return false;
+    if(f.wfSource && t.wfSource !== f.wfSource) return false;
+    return true;
+  });
+}
+
 function getKPIs(){
   const tasks = tasksForPeriod();
   const now = new Date(); now.setHours(0,0,0,0);
@@ -1051,21 +1070,28 @@ function snapshotHistory(){
   const kpi = getKPIs();
   const today = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'});
   const allT = allTasks();
-  // Include WF completed tasks from imports in the completed count
-  const mcCompleted   = (state.mcCompletedData?.tasks||[]).length;
-  const allCompleted  = allT.filter(t=>t.status==='completed').length + mcCompleted;
+  const mcCompleted  = (state.mcCompletedData?.tasks||[]).length;
+  const allCompleted = allT.filter(t=>t.status==='completed').length + mcCompleted;
   const snap = {
     date:today,
     docCompleted: allCompleted,
     docPending:   allT.filter(t=>t.status!=='completed').length,
     overdueCount: kpi.overdueCount,
     wfTaskCount:  (state.wfData?.tasks||[]).length + (state.wfData?.projects||[]).length,
+    real: true,   // mark as real data
   };
+
+  // If this is the first real snapshot, purge all demo snapshots that preceded it
+  const hasRealData = state.mcData && state.lastSync !== 'demo mode';
+  if(hasRealData && state.history.some(h => !h.real)){
+    state.history = state.history.filter(h => h.real);
+  }
+
   if(state.history.length && state.history[state.history.length-1].date===today){
-    state.history[state.history.length-1]=snap;
+    state.history[state.history.length-1] = snap;
   } else {
     state.history.push(snap);
-    if(state.history.length>53) state.history.shift();
+    if(state.history.length > 53) state.history.shift();
   }
 }
 
@@ -1089,6 +1115,62 @@ function render(){
                : v==='member' ? renderMember(state.selectedMember)
                : '';
   setTimeout(attachCharts,60);
+}
+
+// ── TEAM FILTER PANEL ──
+function renderTeamFilterPanel(){
+  const f = state.teamFilter;
+  const tasks = getUpcomingTasks();
+
+  // Get unique workflows from MC tasks
+  const workflows = [...new Set(
+    tasks.filter(t=>t.source==='MasterControl').map(t=>t.workflow).filter(Boolean)
+  )].sort();
+
+  // Get unique wfSources from WF Issues
+  const wfSources = [...new Set(
+    tasks.filter(t=>t.source==='WF Issue').map(t=>t.wfSource).filter(Boolean)
+  )].sort();
+
+  // Get unique wfSources from WF Tasks (project names)
+  const wfTaskSources = [...new Set(
+    tasks.filter(t=>t.source==='WF Task').map(t=>t.wfSource).filter(Boolean)
+  )].sort();
+
+  const activeFilters = [f.source, f.workflow, f.wfSource].filter(Boolean).length;
+
+  return `
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+    <select class="btn btn-sm" onchange="setTeamFilter('source',this.value);setTeamFilter('workflow','');setTeamFilter('wfSource','')" style="cursor:pointer">
+      <option value="" ${!f.source?'selected':''}>All sources</option>
+      <option value="MasterControl" ${f.source==='MasterControl'?'selected':''}>MasterControl</option>
+      <option value="WF Task" ${f.source==='WF Task'?'selected':''}>Workfront Tasks</option>
+      <option value="WF Issue" ${f.source==='WF Issue'?'selected':''}>Workfront Issues</option>
+    </select>
+
+    ${f.source==='MasterControl' && workflows.length ? `
+    <select class="btn btn-sm" onchange="setTeamFilter('workflow',this.value)" style="cursor:pointer">
+      <option value="">All workflows</option>
+      ${workflows.map(w=>`<option value="${w}" ${f.workflow===w?'selected':''}>${w}</option>`).join('')}
+    </select>` : ''}
+
+    ${f.source==='WF Issue' && wfSources.length ? `
+    <select class="btn btn-sm" onchange="setTeamFilter('wfSource',this.value)" style="cursor:pointer">
+      <option value="">All queues</option>
+      ${wfSources.map(s=>`<option value="${s}" ${f.wfSource===s?'selected':''}>${s}</option>`).join('')}
+    </select>` : ''}
+
+    ${f.source==='WF Task' && wfTaskSources.length ? `
+    <select class="btn btn-sm" onchange="setTeamFilter('wfSource',this.value)" style="cursor:pointer">
+      <option value="">All projects</option>
+      ${wfTaskSources.map(s=>`<option value="${s}" ${f.wfSource===s?'selected':''}>${s}</option>`).join('')}
+    </select>` : ''}
+
+    ${activeFilters > 0 ? `
+    <button class="btn btn-sm" style="color:var(--danger)" onclick="state.teamFilter={source:'',workflow:'',wfSource:''};render()">
+      ✕ Clear filters
+    </button>` : ''}
+  </div>`;
 }
 
 // ── TEAM OVERVIEW ──
@@ -1226,12 +1308,16 @@ function renderTeam(){
     </div>
   </div>
 
+  ${renderTeamFilterPanel()}
   <div class="full-row card">
     <div class="card-header">
-      <div><div class="card-title">Upcoming &amp; Overdue</div><div class="card-subtitle">Due within 14 days + all overdue items</div></div>
-      <button class="btn btn-sm" onclick="showView('tasks')">View all →</button>
+      <div><div class="card-title">Upcoming &amp; Overdue</div><div class="card-subtitle">Due within 14 days + all overdue · ${getTeamFilteredTasks().length} shown</div></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm" onclick="exportView()">↓ Export</button>
+        <button class="btn btn-sm" onclick="showView('tasks')">View all →</button>
+      </div>
     </div>
-    ${renderTaskTable(getUpcomingTasks(),true)}
+    ${renderTaskTable(getTeamFilteredTasks(),true)}
   </div>`;
 }
 
@@ -1335,6 +1421,9 @@ function renderTrends(){
   return `
   <div class="page-header">
     <div><div class="page-title">Trends</div><div class="page-subtitle">${h.length}-week rolling history — MC + Workfront</div></div>
+    <div class="header-actions">
+      <button class="btn btn-sm" onclick="exportView()">↓ Export CSV</button>
+    </div>
   </div>
   <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
     <div class="kpi-card">
@@ -1392,6 +1481,7 @@ function renderAllTasks(){
   <div class="page-header">
     <div><div class="page-title">All Tasks</div><div class="page-subtitle">${tasks.length} items across all sources</div></div>
     <div class="header-actions">
+      <button class="btn btn-sm" onclick="exportView()">↓ Export CSV</button>
       <select class="btn btn-sm" id="filt-status" onchange="applyFilters()" style="cursor:pointer">
         <option value="">All statuses</option>
         <option value="pending">Pending</option>
@@ -1488,6 +1578,9 @@ function renderMember(name){
         <div class="page-title">${name}</div>
         <div class="page-subtitle">${s.pending} active tasks &middot; ${s.completed + memberCompleted.length} completed on record</div>
       </div>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-sm" onclick="exportView()">↓ Export CSV</button>
     </div>
   </div>
 
@@ -1710,6 +1803,98 @@ function saveSettings(){
 document.getElementById('settings-modal').addEventListener('click',e=>{
   if(e.target===document.getElementById('settings-modal')) closeSettings();
 });
+
+// ─────────────────────────────────────────────
+// EXPORT
+// ─────────────────────────────────────────────
+
+function exportToCSV(rows, filename){
+  if(!rows.length) return;
+  const headers = Object.keys(rows[0]);
+  const csv = [
+    headers.join(','),
+    ...rows.map(r => headers.map(h => {
+      const val = String(r[h]||'').replace(/"/g,'""');
+      return val.includes(',') || val.includes('"') || val.includes('
+') ? `"${val}"` : val;
+    }).join(','))
+  ].join('
+');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+}
+
+function exportView(){
+  const v = state.currentView;
+  const now = new Date().toISOString().split('T')[0];
+
+  if(v === 'team'){
+    const rows = getTeamFilteredTasks().map(t=>({
+      ID: t.id||'',
+      Title: t.title||'',
+      'Step/Type': t.stepName||t.type||'',
+      Assignee: t.assignee||'',
+      Source: t.wfSource||t.workflow||'',
+      Date: t.dueDate||t.plannedStart||t.queuedDate||'',
+      Status: t.status||'',
+      System: t.source||'',
+    }));
+    exportToCSV(rows, `team-overview-${now}.csv`);
+
+  } else if(v === 'tasks'){
+    const rows = allTasks().map(t=>({
+      ID: t.id||'',
+      Title: t.title||'',
+      'Step/Type': t.stepName||t.type||'',
+      Assignee: t.assignee||'',
+      Source: t.wfSource||t.workflow||'',
+      'Due Date': t.dueDate||'',
+      'Planned Start': t.plannedStart||'',
+      'In Queue Since': t.queuedDate||'',
+      'Completed Date': t.completedDate||'',
+      Status: t.status||'',
+      Priority: t.priority||'',
+      System: t.source||'',
+    }));
+    exportToCSV(rows, `all-tasks-${now}.csv`);
+
+  } else if(v === 'trends'){
+    const rows = state.history.map(h=>({
+      Week: h.date,
+      Completed: h.docCompleted||0,
+      Pending: h.docPending||0,
+      Overdue: h.overdueCount||0,
+    }));
+    exportToCSV(rows, `trends-${now}.csv`);
+
+  } else if(v === 'member' && state.selectedMember){
+    const s = getMemberSummary(state.selectedMember);
+    const memberDoneWF = (state.wfData?.tasks||[]).filter(t=>
+      t.status==='completed' && normName(t.assignee)===normName(state.selectedMember)
+    );
+    const memberDoneMC = (state.mcCompletedData?.tasks||[]).filter(t=>
+      normName(t.assignee)===normName(state.selectedMember)
+    );
+    const rows = [...s.tasks, ...memberDoneWF, ...memberDoneMC].map(t=>({
+      ID: t.id||'',
+      Title: t.title||'',
+      'Step/Type': t.stepName||t.type||'',
+      Source: t.wfSource||t.workflow||'',
+      'Due Date': t.dueDate||'',
+      'Planned Start': t.plannedStart||'',
+      'In Queue Since': t.queuedDate||'',
+      'Completed Date': t.completedDate||'',
+      Status: t.status||'',
+      Priority: t.priority||'',
+      System: t.source||'',
+    }));
+    const safeName = state.selectedMember.replace(/\s+/g,'-').toLowerCase();
+    exportToCSV(rows, `${safeName}-tasks-${now}.csv`);
+  }
+}
 
 // ─────────────────────────────────────────────
 // INIT
