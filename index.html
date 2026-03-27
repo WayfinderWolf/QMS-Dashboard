@@ -701,23 +701,29 @@ function handleWFImport(file){
           const priority = r['Project: Priority']||r['Priority']||r['priority']||'medium';
           const title    = r['Task Name']||r['Name']||r['title']||'Unnamed';
           const dueDate  = normalizeDate(r['Due Date']||r['Due']||r['dueDate']);
-          const completedDate = normalizeDate(r['Completion Date']||r['Completed Date']||r['completionDate']);
+          // 'Entry' = queue/submission date (Workfront Issues export)
+          // 'Act Comp' = actual completion date (Workfront Issues export)
+          const entryDate     = normalizeDate(r['Entry']||r['Entry Date']||r['Submit Date']||r['Submitted']);
+          const completedDate = normalizeDate(r['Act Comp']||r['Actual Completion']||r['Completion Date']||r['Completed Date']||r['completionDate']);
           // If completion date exists, task is completed
           const status = completedDate ? 'completed'
                        : normalizeStatus(r['Status']||r['status']||'pending');
+          // Distinguish Issues (have 'Ref #') from Tasks (have 'Task Name')
+          const isIssue = r['Ref #'] !== undefined;
           return {
-            id:           r['Task ID']||r['ID']||'WF-'+(i+1),
+            id:           r['Ref #']||r['Task ID']||r['ID']||'WF-'+(i+1),
             title,
             assignee,
             status,
             dueDate,
+            queuedDate:   entryDate,
             completedDate,
             priority:     normalizePriority(priority),
             project,
             wfName:       project,
-            type:         r['Task Type']||r['Type']||'Workfront Task',
-            stepName:     r['Task Type']||r['Type']||'',
-            source:       'Workfront',
+            type:         r['Task Type']||r['Type']||(isIssue?'WF Issue':'WF Task'),
+            stepName:     r['Task Type']||r['Type']||(isIssue?'Issue':'Task'),
+            source:       isIssue ? 'WF Issue' : 'WF Task',
           };
         });
       }
@@ -799,7 +805,7 @@ function handleMCCompletedImport(file){
         status:       'completed',
         dueDate:      null,
         queuedDate:   null,
-        completedDate:normalizeDate(r['Completion Date']||r['Completed Date']||r['Date Completed']||r['Date']),
+        completedDate:normalizeDate(r['Act Comp']||r['Actual Completion']||r['Completion Date']||r['Completed Date']||r['Date Completed']||r['Date']),
         workflow:     r['Route']||r['Workflow']||r['Route Name']||r['Project: Name']||r['Project']||'',
         wfName:       r['Route']||r['Workflow']||r['Route Name']||r['Project: Name']||r['Project']||'',
         type:         r['Type']||r['Task Type']||'Completed Task',
@@ -1244,7 +1250,8 @@ function renderAllTasks(){
       <select class="btn btn-sm" id="filt-source" onchange="applyFilters()" style="cursor:pointer">
         <option value="">All sources</option>
         <option value="MasterControl">MasterControl</option>
-        <option value="Workfront">Workfront</option>
+        <option value="WF Task">Workfront Tasks</option>
+        <option value="WF Issue">Workfront Issues</option>
       </select>
     </div>
   </div>
@@ -1260,7 +1267,7 @@ function applyFilters(){
   let tasks = allTasks();
   if(status) tasks=tasks.filter(t=>t.status===status);
   if(member) tasks=tasks.filter(t=>normName(t.assignee)===normName(member));
-  if(source) tasks=tasks.filter(t=>t.source===source);
+  if(source) tasks=tasks.filter(t=>t.source===source||t.source?.startsWith(source));
   tasks.sort((a,b)=>{
     if(isOverdue(a)&&!isOverdue(b)) return -1;
     if(!isOverdue(a)&&isOverdue(b)) return 1;
