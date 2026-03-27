@@ -517,7 +517,9 @@ async function mcConnect(){
 
   _diag['1_connect_raw'] = data;
 
-  const connectionID = data.result?.connectionID
+  // MC returns the connectionID as a plain string in data.result
+  const connectionID = (typeof data.result === 'string' ? data.result : null)
+                    || data.result?.connectionID
                     || data.result?.connectionId
                     || data.result?.id
                     || data.connectionID
