@@ -340,51 +340,72 @@ async function mcFetch(path, opts={}){
 
 // Fetch all active workflow task lists, then fan out per workflow document
 async function fetchMCWorkflowTasks(){
-  // Step 1: get all active workflows
-  let wfRaw;
+  // Step 1: get ENABLED (active/in-progress) form instances — not workflow templates
+  let enabledRaw;
   try {
-    wfRaw = await mcFetch(MC_ENDPOINTS.workflows);
-    _diag['1_workflows_raw'] = wfRaw;
+    enabledRaw = await mcFetch(MC_ENDPOINTS.workflowsEnabled);
+    _diag['1_workflows_raw'] = Array.isArray(enabledRaw) ? enabledRaw.slice(0,3) : enabledRaw;
   } catch(e) {
-    _diag['1_workflows_raw'] = { FETCH_ERROR: e.message, url: (state.settings.mcUrl||'') + MC_ENDPOINTS.workflows };
-    return { workflows: [], wfTasks: [] };
+    _diag['1_workflows_raw'] = { FETCH_ERROR: e.message };
+    // Fall back to trying the base workflows endpoint
+    try {
+      enabledRaw = await mcFetch(MC_ENDPOINTS.workflows);
+      _diag['1_workflows_raw_fallback'] = Array.isArray(enabledRaw) ? enabledRaw.slice(0,3) : enabledRaw;
+    } catch(e2) {
+      _diag['1_workflows_raw_fallback'] = { FETCH_ERROR: e2.message };
+      return { workflows: [], wfTasks: [] };
+    }
   }
 
-  const workflows = Array.isArray(wfRaw) ? wfRaw : (wfRaw.items || wfRaw.results || wfRaw.data || []);
-  _diag['2_workflows_parsed'] = { count: workflows.length, firstItem: workflows[0] || null };
+  const instances = Array.isArray(enabledRaw)
+    ? enabledRaw
+    : (enabledRaw.items || enabledRaw.results || enabledRaw.data || enabledRaw.forms || []);
 
-  // Step 2: for each workflow, get its tasks (fan-out, max 40 concurrent)
-  const BATCH = 40;
+  _diag['2_instances_parsed'] = { count: instances.length, firstItem: instances[0] || null };
+
+  if(instances.length === 0){
+    _diag['2_instances_parsed'].note = 'No active form instances returned. The enabled endpoint may require query params.';
+    return { workflows: instances, wfTasks: [] };
+  }
+
+  // Step 2: for each active form instance, get its pending tasks
+  // Active form instances should have a documentNumber or formInstanceId field
+  const BATCH = 20;
   const allTasks = [];
   const taskSamples = [];
 
-  for(let i=0; i<workflows.length; i+=BATCH){
-    const batch = workflows.slice(i, i+BATCH);
+  for(let i=0; i<instances.length; i+=BATCH){
+    const batch = instances.slice(i, i+BATCH);
     const results = await Promise.allSettled(
-      batch.map(wf => {
-        const docNum = wf.documentNumber || wf.formNumber || wf.number || wf.id || '';
+      batch.map(inst => {
+        // Try every plausible document number field on the instance
+        const docNum = inst.documentNumber || inst.formNumber || inst.instanceNumber
+                    || inst.number || inst.formInstanceId || inst.id || '';
+        if(!docNum) return Promise.resolve({ inst, data: null, docNum: '(no docNum field found)' });
         return mcFetch(MC_ENDPOINTS.workflowTasks + encodeURIComponent(docNum))
-          .then(data => ({wf, data, docNum}))
-          .catch(err => ({ wf, error: err.message, docNum }));
+          .then(data => ({inst, data, docNum}))
+          .catch(err => ({ inst, error: err.message, docNum }));
       })
     );
+
     results.forEach(r => {
-      if(r.status==='fulfilled' && r.value){
-        const {wf, data, error, docNum} = r.value;
+      if(r.status === 'fulfilled' && r.value){
+        const {inst, data, error, docNum} = r.value;
         if(error){
           if(taskSamples.length < 3) taskSamples.push({ docNum, error });
           return;
         }
+        if(!data) return;
         if(taskSamples.length < 3) taskSamples.push({ docNum, rawResponse: data });
         const tasks = Array.isArray(data) ? data : (data.items || data.tasks || data.results || data.data || []);
-        tasks.forEach(t => allTasks.push(mapMCWorkflowTask(t, wf)));
+        tasks.forEach(t => allTasks.push(mapMCWorkflowTask(t, inst)));
       }
     });
   }
 
-  _diag['3_workflow_task_samples'] = taskSamples;
-  _diag['4_total_wf_tasks_mapped'] = allTasks.length;
-  return { workflows, wfTasks: allTasks };
+  _diag['3_task_samples'] = taskSamples;
+  _diag['4_total_tasks_mapped'] = allTasks.length;
+  return { workflows: instances, wfTasks: allTasks };
 }
 
 // Fetch document tasks via search endpoint
