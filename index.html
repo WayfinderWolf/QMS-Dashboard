@@ -1224,14 +1224,26 @@ function fdDropdown(key, label, options, selected){
 }
 
 function fdToggle(id){
-  // Close all others first
+  const el = document.getElementById(id);
+  if(!el) return;
+  const isOpen = el.classList.contains('open') || el.style.display === 'block';
+  // Close all open dropdowns
   document.querySelectorAll('.fd-menu.open').forEach(m=>{ if(m.id!==id) m.classList.remove('open'); });
-  document.getElementById(id)?.classList.toggle('open');
+  document.querySelectorAll('[id^="asgn-"]').forEach(m=>{ if(m.id!==id) m.style.display='none'; });
+  // Toggle this one
+  if(el.classList.contains('fd-menu')){
+    el.classList.toggle('open');
+  } else {
+    el.style.display = isOpen ? 'none' : 'block';
+  }
 }
 
 // Close dropdowns when clicking outside
 document.addEventListener('click', e=>{
-  if(!e.target.closest('.fd-wrap')) document.querySelectorAll('.fd-menu.open').forEach(m=>m.classList.remove('open'));
+  if(!e.target.closest('.fd-wrap') && !e.target.closest('[id^="wrap-asgn"]')){
+    document.querySelectorAll('.fd-menu.open').forEach(m=>m.classList.remove('open'));
+    document.querySelectorAll('[id^="asgn-"]').forEach(m=>m.style.display='none');
+  }
 });
 
 function buildSidebarFilters(){
@@ -1906,29 +1918,26 @@ function renderSchedule(){
 
 function renderAssigneeSelect(weekIso, taskId, currentVal){
   const selected = currentVal ? currentVal.split('/').map(s=>s.trim()).filter(Boolean) : [];
-  const uid = 'asgn-'+taskId+'-'+weekIso.slice(0,10);
+  const uid = 'asgn-'+taskId.replace(/[^a-z0-9]/gi,'_')+'-'+weekIso.slice(0,10).replace(/-/g,'');
   const label = selected.length===0 ? '— unassigned —'
               : selected.length===1 ? selected[0]
               : selected.join(', ');
   const members = [...state.settings.members, 'TBD'];
-  return `<div class="fd-wrap" id="wrap-${uid}" style="position:relative">
-    <button class="fd-btn ${selected.length?'active':''}" onclick="fdToggle('${uid}')"
-      style="width:100%;padding:4px 8px;font-size:12px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${label}</span>
-      <span style="font-size:9px;opacity:.5;flex-shrink:0">▼</span>
+  const items = members.map(m => {
+    const chk = selected.includes(m) ? 'checked' : '';
+    return `<label style="display:flex;align-items:center;gap:7px;padding:6px 10px;cursor:pointer;font-size:12px;color:var(--text-muted);transition:background .1s" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''"><input type="checkbox" ${chk} style="width:12px;height:12px;cursor:pointer;accent-color:var(--accent);flex-shrink:0" onchange="toggleScheduleAssignee('${weekIso}','${taskId}','${m}',this.checked)">${m}</label>`;
+  }).join('');
+  return `<div style="position:relative" id="wrap-${uid}">
+    <button onclick="fdToggle('${uid}')" style="width:100%;padding:4px 8px;font-size:12px;text-align:left;display:flex;justify-content:space-between;align-items:center;border:1px solid ${selected.length?'var(--accent)':'var(--border)'};border-radius:var(--radius-sm);background:var(--surface2);color:${selected.length?'var(--accent)':'var(--text-muted)'};font-family:inherit;cursor:pointer;white-space:nowrap;overflow:hidden">
+      <span style="overflow:hidden;text-overflow:ellipsis;flex:1">${label}</span>
+      <span style="font-size:9px;opacity:.5;flex-shrink:0;margin-left:4px">▼</span>
     </button>
-    <div class="fd-menu" id="${uid}">
-      <label class="fd-item ${selected.length===0?'checked':''}">
-        <input type="checkbox" ${selected.length===0?'checked':''}
-          onchange="if(this.checked){saveScheduleField('${weekIso}','${taskId}','assignee','');fdToggle('${uid}')}">
+    <div id="${uid}" style="display:none;position:absolute;left:0;right:0;top:calc(100% + 2px);background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius-sm);box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:50;max-height:200px;overflow-y:auto">
+      <label style="display:flex;align-items:center;gap:7px;padding:6px 10px;cursor:pointer;font-size:12px;color:var(--text-subtle);border-bottom:1px solid var(--border)" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
+        <input type="checkbox" ${selected.length===0?'checked':''} style="width:12px;height:12px;cursor:pointer;accent-color:var(--accent)" onchange="if(this.checked){saveScheduleField('${weekIso}','${taskId}','assignee','');document.getElementById('${uid}').style.display='none';document.querySelector('#wrap-${uid} button span').textContent='— unassigned —'}">
         — unassigned —
       </label>
-      ${members.map(m=>`
-      <label class="fd-item ${selected.includes(m)?'checked':''}">
-        <input type="checkbox" ${selected.includes(m)?'checked':''}
-          onchange="toggleScheduleAssignee('${weekIso}','${taskId}','${m}',this.checked)">
-        ${m}
-      </label>`).join('')}
+      ${items}
     </div>
   </div>`;
 }
@@ -1946,11 +1955,14 @@ function toggleScheduleAssignee(weekIso, taskId, person, checked){
   persist();
   rebuildScheduleData();
   // Update button label without full re-render
-  const uid = 'asgn-'+taskId+'-'+weekIso.slice(0,10);
-  const btn = document.querySelector(`#wrap-${uid} .fd-btn span:first-child`);
+  const uid = 'asgn-'+taskId.replace(/[^a-z0-9]/gi,'_')+'-'+weekIso.slice(0,10).replace(/-/g,'');
+  const btn = document.querySelector(`#wrap-${uid} button span:first-child`);
   if(btn) btn.textContent = current.length===0?'— unassigned —':current.join(', ');
-  const fdBtn = document.querySelector(`#wrap-${uid} .fd-btn`);
-  if(fdBtn) fdBtn.classList.toggle('active', current.length>0);
+  const fdBtn = document.querySelector(`#wrap-${uid} button`);
+  if(fdBtn){
+    fdBtn.style.borderColor = current.length>0?'var(--accent)':'var(--border)';
+    fdBtn.style.color = current.length>0?'var(--accent)':'var(--text-muted)';
+  }
 }
 
 function setSchedTab(idx){
