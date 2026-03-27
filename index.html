@@ -47,6 +47,10 @@
   .nav-item.active .nav-icon{opacity:1}
   .member-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
   .sidebar-footer{margin-top:auto;padding:10px 6px;border-top:1px solid var(--border)}
+  .sidebar-filter{width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text-muted);font-size:12px;font-family:inherit;outline:none;margin-bottom:5px;cursor:pointer;transition:border-color .15s}
+  .sidebar-filter:focus{border-color:var(--accent)}
+  .filter-active{border-color:var(--accent)!important;color:var(--accent)!important}
+  .sidebar-filter-label{font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--text-subtle);margin-bottom:3px;display:block}
   .settings-btn{display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:var(--radius-sm);cursor:pointer;font-size:12px;color:var(--text-subtle);transition:all .15s}
   .settings-btn:hover{background:var(--surface2);color:var(--text-muted)}
   .page-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px;gap:16px;flex-wrap:wrap}
@@ -165,6 +169,9 @@
       <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="2"/><polyline points="5,8 7,10 11,6"/></svg>
       All Tasks
     </div>
+    <div class="sidebar-section">Filters</div>
+    <div id="sidebar-filters" style="padding:0 8px 8px"></div>
+
     <div class="sidebar-section">Team Members</div>
     <div id="member-nav"></div>
     <div class="sidebar-footer">
@@ -978,12 +985,15 @@ function setTeamFilter(key, val){ state.teamFilter[key] = val; render(); }
 
 function getTeamFilteredTasks(){
   const f = state.teamFilter;
-  return getUpcomingTasks().filter(t => {
-    if(f.source && t.source !== f.source) return false;
-    if(f.workflow && t.workflow !== f.workflow) return false;
-    if(f.wfSource && t.wfSource !== f.wfSource) return false;
-    return true;
-  });
+  return getUpcomingTasks().filter(t => applyTeamFilter(t));
+}
+
+function applyTeamFilter(t){
+  const f = state.teamFilter;
+  if(f.source && t.source !== f.source) return false;
+  if(f.workflow && t.workflow !== f.workflow) return false;
+  if(f.wfSource && t.wfSource !== f.wfSource) return false;
+  return true;
 }
 
 function getKPIs(){
@@ -1005,7 +1015,9 @@ function getKPIs(){
 }
 
 function getMemberSummary(name){
-  const tasks = tasksForPeriod().filter(t=>t.assignee===name||normName(t.assignee)===normName(name));
+  const tasks = tasksForPeriod().filter(t=>
+    (t.assignee===name||normName(t.assignee)===normName(name)) && applyTeamFilter(t)
+  );
   const now = new Date(); now.setHours(0,0,0,0);
   const od = t => t.status!=='completed' && t.dueDate && new Date(t.dueDate)<now;
   const activeTasks    = tasks.filter(t=>t.status==='pending'||t.status==='in_progress');
@@ -1107,6 +1119,7 @@ function render(){
   const nav=document.getElementById('nav-'+state.currentView);
   if(nav) nav.classList.add('active');
 
+  buildSidebarFilters();
   const el=document.getElementById('main-content');
   const v=state.currentView;
   el.innerHTML = v==='team'   ? renderTeam()
@@ -1117,31 +1130,30 @@ function render(){
   setTimeout(attachCharts,60);
 }
 
-// ── TEAM FILTER PANEL ──
-function renderTeamFilterPanel(){
+// ── SIDEBAR FILTERS ──
+function buildSidebarFilters(){
+  const el = document.getElementById('sidebar-filters');
+  if(!el) return;
   const f = state.teamFilter;
-  const tasks = getUpcomingTasks();
 
-  // Get unique workflows from MC tasks
+  // Build option lists from ALL tasks (not just upcoming)
+  const allT = allTasks();
   const workflows = [...new Set(
-    tasks.filter(t=>t.source==='MasterControl').map(t=>t.workflow).filter(Boolean)
+    allT.filter(t=>t.source==='MasterControl').map(t=>t.workflow).filter(Boolean)
   )].sort();
-
-  // Get unique wfSources from WF Issues
-  const wfSources = [...new Set(
-    tasks.filter(t=>t.source==='WF Issue').map(t=>t.wfSource).filter(Boolean)
+  const wfIssueSources = [...new Set(
+    allT.filter(t=>t.source==='WF Issue').map(t=>t.wfSource).filter(Boolean)
   )].sort();
-
-  // Get unique wfSources from WF Tasks (project names)
   const wfTaskSources = [...new Set(
-    tasks.filter(t=>t.source==='WF Task').map(t=>t.wfSource).filter(Boolean)
+    allT.filter(t=>t.source==='WF Task').map(t=>t.wfSource).filter(Boolean)
   )].sort();
 
   const activeFilters = [f.source, f.workflow, f.wfSource].filter(Boolean).length;
 
-  return `
-  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-    <select class="btn btn-sm" onchange="setTeamFilter('source',this.value);setTeamFilter('workflow','');setTeamFilter('wfSource','')" style="cursor:pointer">
+  el.innerHTML = `
+    <span class="sidebar-filter-label">Source</span>
+    <select class="sidebar-filter ${f.source?'filter-active':''}"
+      onchange="setTeamFilter('source',this.value);setTeamFilter('workflow','');setTeamFilter('wfSource','')">
       <option value="" ${!f.source?'selected':''}>All sources</option>
       <option value="MasterControl" ${f.source==='MasterControl'?'selected':''}>MasterControl</option>
       <option value="WF Task" ${f.source==='WF Task'?'selected':''}>Workfront Tasks</option>
@@ -1149,28 +1161,36 @@ function renderTeamFilterPanel(){
     </select>
 
     ${f.source==='MasterControl' && workflows.length ? `
-    <select class="btn btn-sm" onchange="setTeamFilter('workflow',this.value)" style="cursor:pointer">
+    <span class="sidebar-filter-label">Workflow</span>
+    <select class="sidebar-filter ${f.workflow?'filter-active':''}"
+      onchange="setTeamFilter('workflow',this.value)">
       <option value="">All workflows</option>
       ${workflows.map(w=>`<option value="${w}" ${f.workflow===w?'selected':''}>${w}</option>`).join('')}
     </select>` : ''}
 
-    ${f.source==='WF Issue' && wfSources.length ? `
-    <select class="btn btn-sm" onchange="setTeamFilter('wfSource',this.value)" style="cursor:pointer">
+    ${f.source==='WF Issue' && wfIssueSources.length ? `
+    <span class="sidebar-filter-label">Queue / Category</span>
+    <select class="sidebar-filter ${f.wfSource?'filter-active':''}"
+      onchange="setTeamFilter('wfSource',this.value)">
       <option value="">All queues</option>
-      ${wfSources.map(s=>`<option value="${s}" ${f.wfSource===s?'selected':''}>${s}</option>`).join('')}
+      ${wfIssueSources.map(s=>`<option value="${s}" ${f.wfSource===s?'selected':''}>${s}</option>`).join('')}
     </select>` : ''}
 
     ${f.source==='WF Task' && wfTaskSources.length ? `
-    <select class="btn btn-sm" onchange="setTeamFilter('wfSource',this.value)" style="cursor:pointer">
+    <span class="sidebar-filter-label">Project / Source</span>
+    <select class="sidebar-filter ${f.wfSource?'filter-active':''}"
+      onchange="setTeamFilter('wfSource',this.value)">
       <option value="">All projects</option>
       ${wfTaskSources.map(s=>`<option value="${s}" ${f.wfSource===s?'selected':''}>${s}</option>`).join('')}
     </select>` : ''}
 
     ${activeFilters > 0 ? `
-    <button class="btn btn-sm" style="color:var(--danger)" onclick="state.teamFilter={source:'',workflow:'',wfSource:''};render()">
+    <button style="width:100%;padding:5px 8px;border:1px solid var(--danger);border-radius:var(--radius-sm);
+      background:transparent;color:var(--danger);font-size:11px;cursor:pointer;font-family:inherit;margin-top:2px"
+      onclick="state.teamFilter={source:'',workflow:'',wfSource:''};render()">
       ✕ Clear filters
     </button>` : ''}
-  </div>`;
+  `;
 }
 
 // ── TEAM OVERVIEW ──
@@ -1308,7 +1328,6 @@ function renderTeam(){
     </div>
   </div>
 
-  ${renderTeamFilterPanel()}
   <div class="full-row card">
     <div class="card-header">
       <div><div class="card-title">Upcoming &amp; Overdue</div><div class="card-subtitle">Due within 14 days + all overdue · ${getTeamFilteredTasks().length} shown</div></div>
@@ -1470,7 +1489,7 @@ function renderTrends(){
 
 // ── ALL TASKS ──
 function renderAllTasks(){
-  const tasks = allTasks().sort((a,b)=>{
+  const tasks = allTasks().filter(applyTeamFilter).sort((a,b)=>{
     if(isOverdue(a)&&!isOverdue(b)) return -1;
     if(!isOverdue(a)&&isOverdue(b)) return 1;
     const da=new Date(a.dueDate||a.plannedStart||a.queuedDate||0);
@@ -1479,7 +1498,7 @@ function renderAllTasks(){
   });
   return `
   <div class="page-header">
-    <div><div class="page-title">All Tasks</div><div class="page-subtitle">${tasks.length} items across all sources</div></div>
+    <div><div class="page-title">All Tasks</div><div class="page-subtitle">${tasks.length} items${Object.values(state.teamFilter).some(Boolean)?' (filtered)':' across all sources'}</div></div>
     <div class="header-actions">
       <button class="btn btn-sm" onclick="exportView()">↓ Export CSV</button>
       <select class="btn btn-sm" id="filt-status" onchange="applyFilters()" style="cursor:pointer">
@@ -1509,7 +1528,8 @@ function applyFilters(){
   const status = document.getElementById('filt-status')?.value;
   const member = document.getElementById('filt-member')?.value;
   const source = document.getElementById('filt-source')?.value;
-  let tasks = allTasks();
+  // Apply both sidebar persistent filters and in-page filters
+  let tasks = allTasks().filter(applyTeamFilter);
   if(status) tasks = tasks.filter(t => t.status === status);
   if(member) tasks = tasks.filter(t => normName(t.assignee) === normName(member));
   if(source) tasks = tasks.filter(t => t.source === source);
