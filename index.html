@@ -215,7 +215,10 @@
           <div class="drop-zone-sub">Task Name · Assigned To · Due Date · Status · Priority</div>
         </div>
         <input type="file" id="file-wf" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleWFImport(this.files[0])">
-        <div id="wf-status" class="text-sm text-muted mt-1 hidden"></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+          <div id="wf-status" class="text-sm text-muted hidden" style="flex:1"></div>
+          <button class="btn btn-sm hidden" id="wf-clear" onclick="clearImport('wf')" style="color:var(--danger);border-color:var(--danger);flex-shrink:0">✕ Clear</button>
+        </div>
       </div>
       <div>
         <div class="card-title" style="margin-bottom:6px">MC Completed Tasks (.xlsx)</div>
@@ -225,7 +228,10 @@
           <div class="drop-zone-sub">Task Name · Completed By · Completion Date · Route</div>
         </div>
         <input type="file" id="file-mc" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleMCCompletedImport(this.files[0])">
-        <div id="mc-status" class="text-sm text-muted mt-1 hidden"></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+          <div id="mc-status" class="text-sm text-muted hidden" style="flex:1"></div>
+          <button class="btn btn-sm hidden" id="mc-clear" onclick="clearImport('mc')" style="color:var(--danger);border-color:var(--danger);flex-shrink:0">✕ Clear</button>
+        </div>
       </div>
     </div>
 
@@ -688,22 +694,37 @@ function handleWFImport(file){
       const projSheet = wb.SheetNames.find(n=>/proj/i.test(n));
 
       if(taskSheet){
-        tasks = XLSX.utils.sheet_to_json(wb.Sheets[taskSheet]).map((r,i)=>({
-          id:       r['Task ID']||r['ID']||'WF-'+(i+1),
-          title:    r['Task Name']||r['Name']||r['title']||'Unnamed',
-          assignee: r['Assigned To']||r['Assignee']||r['Owner']||'',
-          status:   normalizeStatus(r['Status']||r['status']||'pending'),
-          dueDate:  normalizeDate(r['Due Date']||r['Due']||r['dueDate']),
-          priority: normalizePriority(r['Priority']||r['priority']||'medium'),
-          project:  r['Project']||r['Project Name']||'',
-          type:     r['Task Type']||r['Type']||'Workfront Task',
-          source:   'Workfront',
-        }));
+        tasks = XLSX.utils.sheet_to_json(wb.Sheets[taskSheet]).map((r,i)=>{
+          // Handle Workfront export column names (actual export uses 'Assignments' for assignee)
+          const assignee = r['Assignments']||r['Assigned To']||r['Assignee']||r['Owner']||'';
+          const project  = r['Project: Name']||r['Project']||r['Project Name']||'';
+          const priority = r['Project: Priority']||r['Priority']||r['priority']||'medium';
+          const title    = r['Task Name']||r['Name']||r['title']||'Unnamed';
+          const dueDate  = normalizeDate(r['Due Date']||r['Due']||r['dueDate']);
+          const completedDate = normalizeDate(r['Completion Date']||r['Completed Date']||r['completionDate']);
+          // If completion date exists, task is completed
+          const status = completedDate ? 'completed'
+                       : normalizeStatus(r['Status']||r['status']||'pending');
+          return {
+            id:           r['Task ID']||r['ID']||'WF-'+(i+1),
+            title,
+            assignee,
+            status,
+            dueDate,
+            completedDate,
+            priority:     normalizePriority(priority),
+            project,
+            wfName:       project,
+            type:         r['Task Type']||r['Type']||'Workfront Task',
+            stepName:     r['Task Type']||r['Type']||'',
+            source:       'Workfront',
+          };
+        });
       }
       if(projSheet){
         projects = XLSX.utils.sheet_to_json(wb.Sheets[projSheet]).map((r,i)=>({
           id:     r['Project ID']||r['ID']||'P-'+(i+1),
-          name:   r['Project Name']||r['Name']||'Unnamed',
+          name:   r['Project: Name']||r['Project Name']||r['Name']||'Unnamed',
           status: normalizeStatus(r['Status']||'in_progress'),
           owner:  r['Owner']||r['Project Owner']||'',
           dueDate:normalizeDate(r['Due Date']||r['End Date']),
@@ -714,12 +735,48 @@ function handleWFImport(file){
       snapshotHistory(); persist();
       el.style.color='var(--success)';
       el.textContent=`✓ ${tasks.length} tasks, ${projects.length} projects from "${file.name}"`;
+      document.getElementById('wf-clear')?.classList.remove('hidden');
     }catch(err){
       el.style.color='var(--danger)';
       el.textContent='✗ Could not parse: '+err.message;
     }
   };
   reader.readAsArrayBuffer(file);
+}
+
+// Clear imported data
+function clearImport(type){
+  if(type === 'wf'){
+    state.wfData = null;
+    const el = document.getElementById('wf-status');
+    if(el){ el.textContent=''; el.classList.add('hidden'); }
+    document.getElementById('wf-clear')?.classList.add('hidden');
+    document.getElementById('file-wf').value = '';
+  } else if(type === 'mc'){
+    state.mcCompletedData = null;
+    const el = document.getElementById('mc-status');
+    if(el){ el.textContent=''; el.classList.add('hidden'); }
+    document.getElementById('mc-clear')?.classList.add('hidden');
+    document.getElementById('file-mc').value = '';
+  }
+  persist();
+  render();
+}
+
+// Show clear buttons and status when data is already loaded (opening settings)
+function refreshImportStatus(){
+  if(state.wfData){
+    const el = document.getElementById('wf-status');
+    if(el){ el.classList.remove('hidden'); el.style.color='var(--success)';
+      el.textContent=`✓ ${state.wfData.tasks?.length||0} tasks loaded (imported ${new Date(state.wfData.importedAt).toLocaleDateString()})`; }
+    document.getElementById('wf-clear')?.classList.remove('hidden');
+  }
+  if(state.mcCompletedData){
+    const el = document.getElementById('mc-status');
+    if(el){ el.classList.remove('hidden'); el.style.color='var(--success)';
+      el.textContent=`✓ ${state.mcCompletedData.tasks?.length||0} tasks loaded (imported ${new Date(state.mcCompletedData.importedAt).toLocaleDateString()})`; }
+    document.getElementById('mc-clear')?.classList.remove('hidden');
+  }
 }
 
 // MC Completed Tasks import handler
@@ -735,20 +792,20 @@ function handleMCCompletedImport(file){
       const rows = XLSX.utils.sheet_to_json(sheet);
 
       const completed = rows.map((r,i)=>({
-        id:          r['Task ID']||r['ID']||r['Packet ID']||'MCH-'+(i+1),
-        title:       r['Task Name']||r['Document Title']||r['Name']||r['title']||'Unnamed',
-        stepName:    r['Step']||r['Step Name']||r['Task Type']||'',
-        assignee:    r['Completed By']||r['Assigned To']||r['User']||r['Username']||'',
-        status:      'completed',
-        dueDate:     null,
-        queuedDate:  null,
-        completedDate: normalizeDate(r['Completion Date']||r['Completed Date']||r['Date Completed']||r['Date']),
-        workflow:    r['Route']||r['Workflow']||r['Route Name']||'',
-        wfName:      r['Route']||r['Workflow']||r['Route Name']||'',
-        type:        r['Type']||r['Task Type']||'MC Completed',
-        priority:    normalizePriority(r['Priority']||''),
-        mcLink:      '',
-        source:      'MasterControl',
+        id:           r['Task ID']||r['ID']||r['Packet ID']||'MCH-'+(i+1),
+        title:        r['Task Name']||r['Document Title']||r['Name']||r['title']||'Unnamed',
+        stepName:     r['Step']||r['Step Name']||r['Task Type']||r['Type']||'',
+        assignee:     r['Assignments']||r['Completed By']||r['Assigned To']||r['User']||r['Username']||'',
+        status:       'completed',
+        dueDate:      null,
+        queuedDate:   null,
+        completedDate:normalizeDate(r['Completion Date']||r['Completed Date']||r['Date Completed']||r['Date']),
+        workflow:     r['Route']||r['Workflow']||r['Route Name']||r['Project: Name']||r['Project']||'',
+        wfName:       r['Route']||r['Workflow']||r['Route Name']||r['Project: Name']||r['Project']||'',
+        type:         r['Type']||r['Task Type']||'Completed Task',
+        priority:     normalizePriority(r['Project: Priority']||r['Priority']||''),
+        mcLink:       '',
+        source:       'MasterControl',
       }));
 
       // Store separately from live tasks
@@ -759,6 +816,7 @@ function handleMCCompletedImport(file){
 
       el.style.color='var(--success)';
       el.textContent=`✓ ${completed.length} completed tasks imported from "${file.name}"`;
+      document.getElementById('mc-clear')?.classList.remove('hidden');
       render();
     }catch(err){
       el.style.color='var(--danger)';
@@ -1414,6 +1472,7 @@ function openSettings(){
   document.getElementById('mc-token').value=state.settings.mcToken||'';
   document.getElementById('mc-interval').value=state.settings.mcInterval||15;
   document.getElementById('team-members').value=state.settings.members.join(', ');
+  setTimeout(refreshImportStatus, 50);
   const unMap = state.settings.mcUsernames || {};
   document.getElementById('mc-usernames').value = Object.entries(unMap).map(([k,v])=>k+'='+v).join('\n');
 }
