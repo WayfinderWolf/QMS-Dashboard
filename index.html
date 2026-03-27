@@ -1235,20 +1235,42 @@ function renderTeam(){
 }
 
 function getUpcomingTasks(){
-  const now=new Date(); now.setHours(0,0,0,0);
-  const fwd=new Date(now); fwd.setDate(fwd.getDate()+14);
-  return allTasks().filter(t=>{
+  const now = new Date(); now.setHours(0,0,0,0);
+  const fwd = new Date(now); fwd.setDate(fwd.getDate()+14);
+
+  const tasks = allTasks().filter(t=>{
     if(t.status==='completed') return false;
-    // Use dueDate, plannedStart, or queuedDate — whichever is available
-    const dateToCheck = t.dueDate || t.plannedStart || t.queuedDate;
-    if(!dateToCheck) return false;
-    const d = new Date(dateToCheck);
-    return d < fwd;
-  }).sort((a,b)=>{
-    const da = new Date(a.dueDate||a.plannedStart||a.queuedDate||0);
-    const db = new Date(b.dueDate||b.plannedStart||b.queuedDate||0);
+
+    // Always include overdue items (have a dueDate in the past)
+    if(t.dueDate && new Date(t.dueDate) < now) return true;
+
+    // Include WF tasks/issues with a plannedStart in the next 14 days
+    if(t.plannedStart){
+      const d = new Date(t.plannedStart);
+      return d >= now && d < fwd;
+    }
+
+    // Include tasks with a dueDate in the next 14 days
+    if(t.dueDate){
+      const d = new Date(t.dueDate);
+      return d >= now && d < fwd;
+    }
+
+    // Do NOT include tasks where only queuedDate exists — that's an entry date,
+    // not a due date, and would flood the panel with every MC task
+    return false;
+  });
+
+  // Sort: overdue first (by dueDate asc), then upcoming (by dueDate/plannedStart asc)
+  return tasks.sort((a,b)=>{
+    const aOD = a.dueDate && new Date(a.dueDate) < now;
+    const bOD = b.dueDate && new Date(b.dueDate) < now;
+    if(aOD && !bOD) return -1;
+    if(!aOD && bOD) return 1;
+    const da = new Date(a.dueDate||a.plannedStart||0);
+    const db = new Date(b.dueDate||b.plannedStart||0);
     return da - db;
-  }).slice(0,12);
+  }).slice(0, 20);
 }
 
 function renderTaskTable(tasks, showSource=true){
