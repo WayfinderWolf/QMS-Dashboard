@@ -930,9 +930,10 @@ function getKPIs(){
   const tasks = allTasks();
   const now = new Date(); now.setHours(0,0,0,0);
   const od = t => t.status!=='completed' && t.dueDate && new Date(t.dueDate)<now;
+  const mcImportedCount = (state.mcCompletedData?.tasks||[]).length;
   return {
     totalPending:   tasks.filter(t=>t.status==='pending'||t.status==='in_progress').length,
-    totalCompleted: tasks.filter(t=>t.status==='completed').length,
+    totalCompleted: tasks.filter(t=>t.status==='completed').length + mcImportedCount,
     overdueCount:   tasks.filter(od).length,
     activeWorkflows:(state.mcData?.workflows||[]).filter(w=>w.status==='active'||w.status==='ACTIVE').length,
     wfProjects:     (state.wfData?.projects||[]).filter(p=>p.status==='in_progress').length,
@@ -1345,6 +1346,25 @@ function renderAllTasks(){
   <div class="card">
     <div id="task-wrap">${renderTaskTable(tasks,true)}</div>
   </div>`;
+}
+
+function applyFilters(){
+  const status = document.getElementById('filt-status')?.value;
+  const member = document.getElementById('filt-member')?.value;
+  const source = document.getElementById('filt-source')?.value;
+  let tasks = allTasks();
+  if(status) tasks = tasks.filter(t => t.status === status);
+  if(member) tasks = tasks.filter(t => normName(t.assignee) === normName(member));
+  if(source) tasks = tasks.filter(t => t.source === source);
+  tasks.sort((a,b)=>{
+    if(isOverdue(a)&&!isOverdue(b)) return -1;
+    if(!isOverdue(a)&&isOverdue(b)) return 1;
+    const da=new Date(a.dueDate||a.plannedStart||a.queuedDate||0);
+    const db=new Date(b.dueDate||b.plannedStart||b.queuedDate||0);
+    return da-db;
+  });
+  const wrap = document.getElementById('task-wrap');
+  if(wrap) wrap.innerHTML = renderTaskTable(tasks, true);
 }
 
 function renderMember(name){
