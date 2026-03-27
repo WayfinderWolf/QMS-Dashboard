@@ -269,17 +269,7 @@
         </div>
       </div>
     </div>
-    <div class="card-title" style="margin-bottom:6px">Weekly Schedule (.xlsx)</div>
-    <div class="drop-zone" id="drop-zone-sched" onclick="document.getElementById('file-sched').click()">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text-subtle)" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-      <div class="drop-zone-text">Drop weekly schedule here</div>
-      <div class="drop-zone-sub">Import Monday morning · drives per-person KPI targets · all schedule sheets parsed automatically</div>
-    </div>
-    <input type="file" id="file-sched" accept=".xlsx,.xls" class="hidden" onchange="handleScheduleImport(this.files[0])">
-    <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-      <div id="sched-status" class="text-sm text-muted hidden" style="flex:1"></div>
-      <button class="btn btn-sm hidden" id="sched-clear" onclick="clearImport('sched')" style="color:var(--danger);border-color:var(--danger);flex-shrink:0">✕ Clear</button>
-    </div>
+
 
     <div class="divider"></div>
 
@@ -302,6 +292,72 @@
 </div>
 
 <script>
+/*
+ * ═══════════════════════════════════════════════════════════════════════
+ * QMS OPERATIONS DASHBOARD  —  Architecture Overview
+ * ═══════════════════════════════════════════════════════════════════════
+ *
+ * This is a single-file HTML dashboard with no backend or build step.
+ * All data lives in the browser's localStorage and is never sent to any
+ * server except MasterControl (via the Cloudflare Worker proxy) and
+ * Anthropic's API (if the AI assistant is enabled).
+ *
+ * DATA SOURCES
+ * ─────────────────────────────────────────────────────────────────────
+ *  MasterControl (live)
+ *    • Authenticates via SOAP/JSON bridge at /ws/JSONBridge.cfm
+ *    • Calls connectWithApiKey → gets a connectionID
+ *    • Calls getUsersTasks per team member → active task queue
+ *    • Routed through Cloudflare Worker to bypass CORS restrictions
+ *    • API token stored in localStorage, never leaves the browser
+ *
+ *  Workfront (weekly import)
+ *    • Drag-and-drop .xlsx export from Workfront
+ *    • Supports both Issues exports (Ref #, Entry, Act Comp columns)
+ *      and Task exports (Task Name, Due Date, Completion Date columns)
+ *    • Hyperlinks embedded in Excel cells are extracted for deep links
+ *    • Multiple imports merge/deduplicate by task ID
+ *
+ *  MC Completed Tasks (periodic import)
+ *    • Drag-and-drop .xlsx export from MasterControl reports
+ *    • Used for completion history charts and KPI actuals
+ *
+ * STATE MANAGEMENT
+ * ─────────────────────────────────────────────────────────────────────
+ *  state{}  —  single global object, persisted to localStorage as 'qms_v3'
+ *    .settings       API credentials, team member names, MC usernames
+ *    .mcData         Live MC tasks from last sync
+ *    .wfData         Imported Workfront tasks and projects
+ *    .mcCompletedData Imported MC completed task history
+ *    .history[]      Weekly KPI snapshots (up to 53 weeks / 1 year)
+ *    .schedule{}     Built-in weekly schedule keyed by ISO week ('YYYY-WW')
+ *    .teamFilter{}   Persistent sidebar filters (source, workflow, wfSource)
+ *    .period         Time period toggle ('current'|'30d'|'90d'|'all')
+ *    .theme          UI theme ('auto'|'light'|'dark')
+ *
+ * RENDERING
+ * ─────────────────────────────────────────────────────────────────────
+ *  render() is the single re-render function — it rebuilds the entire
+ *  main-content area and sidebar filters from state. No virtual DOM.
+ *  Views: team | trends | tasks | kpis | schedule | member
+ *
+ * KPI ENGINE
+ * ─────────────────────────────────────────────────────────────────────
+ *  DEFAULT_KPI_RULES[] defines 4 tracked KPI types with match functions
+ *  that identify relevant tasks from the imported data. Targets come from
+ *  the Router (FTE time study spreadsheet). The Schedule page assigns
+ *  team members to each task type per week, which feeds into per-person
+ *  KPI tracking on the KPIs page.
+ *
+ * CLOUDFLARE WORKER (proxy)
+ * ─────────────────────────────────────────────────────────────────────
+ *  MC API calls go through a Cloudflare Worker at curly-tooth-2d5f.
+ *  caseyawolf.workers.dev which adds CORS headers. The Worker forwards
+ *  the Authorization header transparently — it never stores credentials.
+ *
+ * ═══════════════════════════════════════════════════════════════════════
+ */
+
 // ─────────────────────────────────────────────
 // CONSTANTS & STATE
 // ─────────────────────────────────────────────
@@ -316,6 +372,7 @@ const MC_ENDPOINTS = {
   docSearch:        '/restapi/v1/documents/search/infoCardVaultChange',
 };
 
+// Avatar and chart colors for each team member (cycles if team > 6 people)
 const MEMBER_COLORS = [
   {bg:'#e6f1fb',color:'#1d6fa8'},{bg:'#e1f5ee',color:'#0f6e56'},
   {bg:'#faeeda',color:'#854f0b'},{bg:'#eeedfe',color:'#534ab7'},
@@ -342,7 +399,10 @@ let state = {
 
 // ─────────────────────────────────────────────
 // PERSIST
+// Saves/loads the entire state object to localStorage as 'qms_v3'.
+// Called after every sync, import, settings change, and schedule edit.
 // ─────────────────────────────────────────────
+// Load persisted state from localStorage, inject mock data if first run
 function loadState(){
   try{
     const s = localStorage.getItem('qms_v3');
@@ -558,9 +618,15 @@ function showDiag(){
 
 // ─────────────────────────────────────────────
 // MC SOAP/JSON BRIDGE API
-// All calls go to /ws/JSONBridge.cfm via POST
+// MasterControl's Web Service API uses a JSON bridge (not REST).
+// Every call is a POST to /ws/JSONBridge.cfm with { serviceName, methodName, arguments }.
+// Auth flow: connectWithApiKey → connectionID → getUsersTasks per member.
+// The Cloudflare Worker at curly-tooth-2d5f.caseyawolf.workers.dev handles
+// CORS so browser-based calls work from any domain.
 // ─────────────────────────────────────────────
 
+// Low-level call to the MasterControl SOAP/JSON bridge at /ws/JSONBridge.cfm.
+// All MC API calls go through this — it handles auth headers and error wrapping.
 async function mcBridge(serviceName, methodName, args){
   const base = (state.settings.mcUrl || '').replace(/\/$/,'');
   const url  = base + '/ws/JSONBridge.cfm';
@@ -589,6 +655,9 @@ async function mcBridge(serviceName, methodName, args){
 }
 
 // Step 1: authenticate with API key → get connectionID
+// Authenticate with MC using the stored API key.
+// Returns a connectionID string (format: 'doterra-XXXXXXXX_...') used by all
+// subsequent SOAP calls. The connectionID is session-scoped, not stored.
 async function mcConnect(){
   const token = state.settings.mcToken;
   if(!token) throw new Error('No API token configured');
@@ -613,6 +682,9 @@ async function mcConnect(){
 }
 
 // Step 2: get tasks for one user (all types)
+// Fetch all pending tasks for a single MC user.
+// 'type' is blank = all task types (approval, collaboration, process, audit).
+// Returns an array of raw SOAP task objects.
 async function mcGetUserTasks(connectionID, username){
   const data = await mcBridge('TaskService', 'getUsersTasks', {
     connectionID,
@@ -623,6 +695,9 @@ async function mcGetUserTasks(connectionID, username){
 }
 
 // Map a raw MC task to our internal format
+// Normalize a raw MC SOAP task object into the dashboard's internal task format.
+// Note: MC task steps have no due date — queuedDate is when it entered the queue.
+// mcLink is empty because MC uses JS-driven navigation with no direct packet URLs.
 function mapSoapTask(t, assignee){
   // All tasks from getUsersTasks are active/pending — completed tasks come from report import
   const status = 'in_progress';
@@ -655,6 +730,10 @@ function mapSoapTask(t, assignee){
 }
 
 // Main sync: connect once, then fan out one call per team member
+// Main sync entry point — authenticates once then fans out one getUsersTasks
+// call per team member in parallel. Has a 15-second timeout guard.
+// Called on page load (if credentials exist), on manual sync, and on the
+// auto-sync interval set in Settings.
 async function syncMasterControl(){
   if(!state.settings.mcUrl || !state.settings.mcToken){
     state.syncError = 'API URL and token required. Open Settings to configure.';
@@ -737,7 +816,19 @@ function startAutoSync(){
 
 // ─────────────────────────────────────────────
 // WORKFRONT IMPORT
+// Workfront doesn't support API access from browser contexts (Adobe IMS blocks it),
+// so data comes in via weekly .xlsx exports dragged into the Settings panel.
+// Two export types are supported:
+//   Issues: ticketing system (Ref #, Assignments, Entry, Act Comp)
+//   Tasks:  project tasks (Task Name, Assignments, Due Date, Completion Date)
+// SheetJS extracts cell hyperlinks for direct WF deep links.
 // ─────────────────────────────────────────────
+// Parse a Workfront .xlsx export dropped into the Settings import zone.
+// Supports both Issues exports (columns: Ref #, Name, Assignments, Entry, Act Comp)
+// and Tasks exports (columns: Task Name, Assignments, Due Date, Completion Date).
+// Detects type by presence of 'Ref #' column.
+// Extracts embedded cell hyperlinks for direct WF deep links.
+// Merges with existing WF data — re-importing the same file won't double-count.
 function handleWFImport(file){
   if(!file) return;
   const el = document.getElementById('wf-status');
@@ -898,12 +989,6 @@ function clearImport(type){
     if(el){ el.textContent=''; el.classList.add('hidden'); }
     document.getElementById('mc-clear')?.classList.add('hidden');
     document.getElementById('file-mc').value = '';
-  } else if(type === 'sched'){
-    state.scheduleData = null;
-    const el = document.getElementById('sched-status');
-    if(el){ el.textContent=''; el.classList.add('hidden'); }
-    document.getElementById('sched-clear')?.classList.add('hidden');
-    document.getElementById('file-sched').value = '';
   }
   persist();
   render();
@@ -923,15 +1008,15 @@ function refreshImportStatus(){
       el.textContent=`✓ ${state.mcCompletedData.tasks?.length||0} tasks loaded (imported ${new Date(state.mcCompletedData.importedAt).toLocaleDateString()})`; }
     document.getElementById('mc-clear')?.classList.remove('hidden');
   }
-  if(state.scheduleData){
-    const el = document.getElementById('sched-status');
-    if(el){ el.classList.remove('hidden'); el.style.color='var(--success)';
-      el.textContent=`✓ ${state.scheduleData.length} assignments loaded`; }
-    document.getElementById('sched-clear')?.classList.remove('hidden');
-  }
+
 }
 
 // MC Completed Tasks import handler
+// Parse an MC completed tasks .xlsx report export.
+// Used to populate the completion history charts on member pages and
+// to provide actuals for the KPI engine (since getUsersTasks only returns
+// active/pending tasks — completed tasks aren't in the live queue).
+// Merges with existing data — weekly delta imports work correctly.
 function handleMCCompletedImport(file){
   if(!file) return;
   const el = document.getElementById('mc-status');
@@ -999,7 +1084,12 @@ function handleMCCompletedImport(file){
 
 // ─────────────────────────────────────────────
 // COMPUTED HELPERS
+// Pure functions that derive display values from state.
+// No side effects — safe to call anywhere.
 // ─────────────────────────────────────────────
+// Returns all tasks from all sources combined: live MC tasks, imported WF tasks,
+// and imported MC completed tasks. This is the master task list used by most
+// views. Apply tasksForPeriod() or getMemberSummary() to filter further.
 function allTasks(){
   const mc        = (state.mcData?.docTasks||[]);
   const wf        = (state.wfData?.tasks||[]);
@@ -1019,6 +1109,10 @@ function completedTasks(){
 // 'current' = active/pending only (no date filter on completed)
 // '30d','90d' = completed within N days; pending always included
 // 'all' = everything
+// Filter allTasks() by the current period toggle:
+//   'current' = active/pending tasks only (no completed)
+//   '30d'/'90d' = completed within N days + all active
+//   'all' = everything including full import history
 function tasksForPeriod(){
   const tasks = allTasks();
   const mcDone = state.mcCompletedData?.tasks || [];
@@ -1056,6 +1150,9 @@ function getTeamFilteredTasks(){
   return getUpcomingTasks().filter(t => applyTeamFilter(t));
 }
 
+// Returns true if a task passes all active sidebar filters.
+// Filters are arrays (multi-select): source[], workflow[], wfSource[].
+// Empty array = no filter applied for that dimension.
 function applyTeamFilter(t){
   const f = state.teamFilter;
   if(f.source.length && !f.source.includes(t.source)) return false;
@@ -1064,6 +1161,10 @@ function applyTeamFilter(t){
   return true;
 }
 
+// Calculate the 6 KPI values shown on the Team Overview cards.
+// Uses tasksForPeriod() so values respond to the period toggle.
+// activeWorkflows counts MC workflow templates with enabled:true.
+// pendingApproval counts active MC tasks at an approval step.
 function getKPIs(){
   const tasks = tasksForPeriod();
   const now = new Date(); now.setHours(0,0,0,0);
@@ -1145,7 +1246,15 @@ function statusBadge(s){
 
 // ─────────────────────────────────────────────
 // HISTORY SNAPSHOTS
+// The Trends page charts are built from weekly snapshots stored in state.history[].
+// A snapshot is taken automatically on every sync and import.
+// Snapshots are tagged real:true once real data arrives — demo snapshots
+// (real:false) are purged to prevent fake/real data mixing on the charts.
 // ─────────────────────────────────────────────
+// Take a KPI snapshot for the current moment and append it to state.history[].
+// Called after every sync and import. History is capped at 53 entries (1 year).
+// Demo snapshots (real:false) are automatically purged when real data arrives.
+// These snapshots power the Trends page charts.
 function snapshotHistory(){
   const kpi = getKPIs();
   const today = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'});
@@ -1177,6 +1286,10 @@ function snapshotHistory(){
 
 // ─────────────────────────────────────────────
 // VIEWS
+// Each view is a function that returns an HTML string injected into #main-content.
+// render() calls the appropriate view function based on state.currentView.
+// Views: team | trends | tasks | kpis | schedule | member
+// showView(name) and showMember(name) update state and call render().
 // ─────────────────────────────────────────────
 function showView(view){ state.currentView=view; state.selectedMember=null; render(); }
 function showMember(name){ state.currentView='member'; state.selectedMember=name; render(); }
@@ -1246,6 +1359,10 @@ document.addEventListener('click', e=>{
   }
 });
 
+// Rebuild the sidebar filter dropdowns from current state.
+// Called on every render() so filters always reflect available options.
+// Secondary dropdowns (Workflow, Queue, Project) appear conditionally
+// based on which source is selected.
 function buildSidebarFilters(){
   const el = document.getElementById('sidebar-filters');
   if(!el) return;
@@ -1430,6 +1547,10 @@ function renderTeam(){
   </div>`;
 }
 
+// Returns tasks due (or with a planned start date) within the next 14 days,
+// plus all overdue tasks. Used for the Upcoming & Overdue panel on Team Overview.
+// MC tasks are excluded since they have no due date (only a queue entry date).
+// Sorted: overdue first, then by date ascending.
 function getUpcomingTasks(){
   const now = new Date(); now.setHours(0,0,0,0);
   const fwd = new Date(now); fwd.setDate(fwd.getDate()+14);
@@ -2090,6 +2211,9 @@ function renderMember(name){
 
 // ─────────────────────────────────────────────
 // CHARTS
+// All charts use Chart.js 4.4.1. Charts are destroyed before re-creating
+// to prevent canvas context leaks. attachCharts() is called via setTimeout
+// after render() so the canvas elements exist in the DOM before Chart.js runs.
 // ─────────────────────────────────────────────
 const charts={};
 function destroyChart(id){ if(charts[id]){charts[id].destroy();delete charts[id];} }
@@ -2220,6 +2344,9 @@ function buildMemberHistChart(){
 
 // ─────────────────────────────────────────────
 // MEMBER NAV
+// Builds the per-member sidebar links dynamically from state.settings.members.
+// Shows a red overdue badge if a member has overdue tasks.
+// Called inside render() so it stays in sync with the active view.
 // ─────────────────────────────────────────────
 function buildMemberNav(){
   const el=document.getElementById('member-nav');
@@ -2239,6 +2366,10 @@ function buildMemberNav(){
 
 // ─────────────────────────────────────────────
 // SETTINGS
+// openSettings() populates the modal fields from current state.
+// saveSettings() persists credentials and triggers a sync if MC is configured.
+// Credentials (API token) are stored in localStorage only — never transmitted
+// except directly to MC via the Cloudflare Worker proxy.
 // ─────────────────────────────────────────────
 function openSettings(){
   document.getElementById('settings-modal').classList.remove('hidden');
@@ -2317,6 +2448,7 @@ const ROUTER_TASKS = [
 ];
 
 // Get ISO week key for a date: 'YYYY-WW'
+// Convert a date to an ISO week key ('YYYY-WW') used as the schedule storage key.
 function weekKey(date){
   const d = new Date(date);
   d.setHours(0,0,0,0);
@@ -2326,6 +2458,7 @@ function weekKey(date){
   return d.getFullYear()+'-'+String(wk).padStart(2,'0');
 }
 
+// Format a date's week as a human-readable label: 'Mar 23 – Mar 27'
 function weekLabel(date){
   const d = new Date(date);
   const day = d.getDay();
@@ -2343,6 +2476,9 @@ function getWeekDates(weeksAhead=0){
   return mon;
 }
 
+// Get or initialize the schedule for a given week.
+// If the week doesn't exist yet, creates it with all Router tasks at baseline
+// quantities and empty assignees. Saves are immediate — no 'save' button needed.
 function getScheduleWeek(weekStart){
   const key = weekKey(weekStart);
   if(!state.schedule[key]){
@@ -2374,6 +2510,10 @@ function savePTONote(weekStart, value){
 }
 
 // Rebuild scheduleData (used by KPI engine) from built-in schedule
+// Derive state.scheduleData[] from the built-in schedule.
+// This bridges the schedule builder to the KPI engine — when you assign
+// a person to 'Change Control' in the schedule, it creates an entry in
+// scheduleData that getAssignedPersons() uses for per-person KPI targets.
 function rebuildScheduleData(){
   const assignments = [];
   Object.entries(state.schedule).forEach(([key, wk])=>{
@@ -2533,115 +2673,17 @@ function getKPIRules(){
 // SCHEDULE IMPORT
 // ─────────────────────────────────────────────
 
-function handleScheduleImport(file){
-  if(!file) return;
-  const el = document.getElementById('sched-status');
-  if(el){ el.classList.remove('hidden'); el.style.color=''; el.textContent='Reading schedule…'; }
-  const reader = new FileReader();
-  reader.onload = e => {
-    try{
-            const wb = XLSX.read(e.target.result, {type:'array', cellFormula:false, cellNF:false});
-      const assignments = [];
-      const debugInfo = [];
 
-      // Parse each sheet that looks like a schedule (has SME/Description header)
-      wb.SheetNames.forEach(sheetName => {
-        const ws = wb.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:false});
-
-        debugInfo.push({sheet: sheetName, rows4to7: rows.slice(3,7)});
-
-        // Skip Router sheet
-        if(sheetName === 'Router') return;
-
-        // Get week date from rows 0-2
-        const weekLabel = (() => {
-          for(let i=0;i<3;i++){
-            const r=rows[i]; if(!r) continue;
-            const v=r.find(v=>v&&typeof v==='string'&&/[A-Z][a-z]+.*\d/.test(v));
-            if(v) return v;
-          }
-          return sheetName;
-        })();
-
-        // Parse ALL rows — extract person+task pairs where:
-        // col B = real person name (capital first name, not S1/S2/S3/Total etc.)
-        // col C = task name string (not a formula, not empty, not a number)
-        for(let i = 0; i < rows.length; i++){
-          const row = rows[i];
-          if(!row) continue;
-          // SheetJS trims leading empty cols, so Nicole lands at index 0 not 1
-          // Try both index 0 and index 1 for person
-          const personRaw = (row[0] && typeof row[0]==='string' && row[0].trim()) ? row[0]
-                          : (row[1] && typeof row[1]==='string' && row[1].trim()) ? row[1]
-                          : null;
-          const taskRaw   = (row[0] && typeof row[0]==='string' && row[0].trim()) ? row[1]  // if person at 0, task at 1
-                          : (row[1] && typeof row[1]==='string' && row[1].trim()) ? row[2]  // if person at 1, task at 2
-                          : null;
-          const person   = personRaw ? String(personRaw).trim() : null;
-          const taskName = taskRaw   ? String(taskRaw).trim()   : null;
-          if(!person || !taskName) continue;
-          // Task name must be a real task description
-          if(taskName.startsWith('=')) continue;
-          if(/^(Est Qty|Description|SME|Run Time|Comments|Total|Router|Qty|\d+)$/i.test(taskName)) continue;
-          // Person must be a real name — not S1/S2/S3, not task/category descriptions
-          if(/^S[123]/i.test(person)) continue;
-          if(/^(Total|SME|Description|Artwork|Global|Regional|Position|PTO|Specialist|CAPA|Deviation|Audit|Ingredient|Packaging|Component|Foreign|Proof|Oil|Bulk|Cosmetic|Supplement|Assembly|Finished|MC\s|Change|SOP|Manual|Form|Internal)/i.test(person)) continue;
-          if(/^(Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Jan|Feb)/i.test(person)) continue;
-          if(!/^[A-Z]/.test(person)) continue; // Must start with capital
-
-          // Match schedule task name (from Router) to a KPI rule id
-          // Router names like "MC Artwork Upload - Regional - PG" -> mc_artwork_upload
-          // Router names like "Assembly Specification (AS) - Regional" -> assembly_spec
-          // Router names like "Finished Product Specification (FPS)" -> fps_global
-          // Router names like "Change Control - Global/Regional" -> change_control
-          let matchedRuleId = null;
-          const tn = taskName.toLowerCase();
-          if(/mc artwork upload|artwork upload/i.test(taskName))        matchedRuleId = 'mc_artwork_upload';
-          else if(/assembly spec/i.test(taskName))                      matchedRuleId = 'assembly_spec';
-          else if(/finished product spec|fps/i.test(taskName))          matchedRuleId = 'fps_global';
-          else if(/change control/i.test(taskName))                     matchedRuleId = 'change_control';
-          const matchedRule = matchedRuleId ? { id: matchedRuleId } : null;
-
-          // Split shared assignments like "Jordan/Jorge"
-          person.split('/').forEach(p => {
-            const name = p.trim();
-            if(name && name.length > 1){
-              assignments.push({
-                person: name,
-                taskName: taskName.trim(),
-                kpiId: matchedRule?.id || null,
-                weekLabel,
-                sheet: sheetName,
-              });
-            }
-          });
-        }
-      });
-
-      state.scheduleData = assignments;
-      persist();
-      console.log('Schedule debug:', debugInfo);
-      console.log('Assignments found:', assignments);
-      if(el){
-        el.style.color = assignments.length > 0 ? 'var(--success)' : 'var(--warning)';
-        el.textContent = assignments.length > 0
-          ? `✓ ${assignments.length} assignments loaded from "${file.name}"`
-          : `⚠ 0 assignments found — check console for debug info`;
-        document.getElementById('sched-clear')?.classList.remove('hidden');
-      }
-      render();
-    }catch(err){
-      if(el){ el.style.color='var(--danger)'; el.textContent='✗ '+err.message; }
-    }
-  };
-  reader.readAsArrayBuffer(file);
-}
 
 // ─────────────────────────────────────────────
 // EXPORT
+// CSV export is available on every page via the '↓ Export CSV' button.
+// exportView() detects the current view and exports the relevant data.
+// Files are named with the current date: team-overview-2026-03-27.csv etc.
 // ─────────────────────────────────────────────
 
+// Convert an array of objects to a CSV file and trigger a browser download.
+// Handles commas, quotes, and newlines in values correctly.
 function exportToCSV(rows, filename){
   if(!rows.length) return;
   const headers = Object.keys(rows[0]);
@@ -2659,6 +2701,12 @@ function exportToCSV(rows, filename){
   a.click();
 }
 
+// Export the current view's data as a CSV file.
+// Team Overview → filtered upcoming/overdue tasks
+// All Tasks → full task list
+// Trends → weekly snapshot history
+// KPIs → current week actuals vs targets
+// Member → that person's full task history
 function exportView(){
   const v = state.currentView;
   const now = new Date().toISOString().split('T')[0];
@@ -2749,7 +2797,14 @@ function exportView(){
 
 // ─────────────────────────────────────────────
 // THEME
+// Three modes: Auto (follows system), Light, Dark.
+// Implemented via CSS classes on <body>: theme-light | theme-dark.
+// 'Auto' removes both classes and falls back to @media prefers-color-scheme.
+// Preference is persisted in localStorage and applied on every page load.
 // ─────────────────────────────────────────────
+// Apply the current theme to document.body by adding/removing CSS classes.
+// 'auto' removes all theme classes and falls back to @media prefers-color-scheme.
+// 'light' / 'dark' override the system preference.
 function applyTheme(){
   const t = state.theme || 'auto';
   document.body.classList.remove('theme-light','theme-dark');
@@ -2768,6 +2823,7 @@ function applyTheme(){
   }
 }
 
+// Cycle through Auto → Light → Dark → Auto on each click of the theme button.
 function cycleTheme(){
   const order = ['auto','light','dark'];
   const cur = state.theme || 'auto';
@@ -2778,6 +2834,11 @@ function cycleTheme(){
 
 // ─────────────────────────────────────────────
 // INIT
+// Startup sequence:
+//   1. loadState()        — restore from localStorage (or inject mock data)
+//   2. render()           — draw the UI
+//   3. startAutoSync()    — begin the MC sync interval loop
+// If MC credentials exist, a sync fires automatically on load.
 // ─────────────────────────────────────────────
 loadState();
 render();
