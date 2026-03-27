@@ -1856,8 +1856,8 @@ function renderSchedule(){
       </button>`).join('')}
   </div>
 
-  ${weeks.map((w,i)=>`
-  <div id="sched-week-${i}" style="display:${i===activeWeekIdx?'block':'none'}">
+  ${weeks.map((w,i)=> i!==activeWeekIdx ? '' : `
+  <div id="sched-week-${i}">
 
     <div class="card" style="margin-bottom:12px">
       <div style="display:flex;align-items:center;gap:10px">
@@ -1966,6 +1966,8 @@ function toggleScheduleAssignee(weekIso, taskId, person, checked){
 }
 
 function setSchedTab(idx){
+  // Close any open dropdowns first
+  document.querySelectorAll('[id^="asgn-"]').forEach(m=>m.style.display='none');
   localStorage.setItem('sched_active_week', idx);
   render();
 }
