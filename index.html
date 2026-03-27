@@ -2177,32 +2177,39 @@ function handleScheduleImport(file){
 
         debugInfo.push({sheet: sheetName, rows4to7: rows.slice(3,7)});
 
-        // Find FIRST header row (stop at first match — row 4 in schedule sheets)
-        let headerRow = -1;
-        for(let i=0; i<Math.min(rows.length,15); i++){
-          const row=rows[i]; if(!row) continue;
-          const vals=row.map(v=>String(v||'').trim());
-          if(vals.includes('SME')&&vals.includes('Description')){ headerRow=i; break; }
-        }
-        if(headerRow<0) return;
+        // Skip Router sheet
+        if(sheetName === 'Router') return;
 
-        // Get week date from row 1 (e.g. "Mar 23rd-27th")
-        const weekLabel = rows[1]?.find(v => v && typeof v === 'string' && /\w+\s+\d/.test(v)) || sheetName;
+        // Get week date from rows 0-2
+        const weekLabel = (() => {
+          for(let i=0;i<3;i++){
+            const r=rows[i]; if(!r) continue;
+            const v=r.find(v=>v&&typeof v==='string'&&/[A-Z][a-z]+.*\d/.test(v));
+            if(v) return v;
+          }
+          return sheetName;
+        })();
 
-        // Parse assignment rows after header
-        for(let i = headerRow + 1; i < rows.length; i++){
+        // Parse ALL rows — extract person+task pairs where:
+        // col B = real person name (capital first name, not S1/S2/S3/Total etc.)
+        // col C = task name string (not a formula, not empty, not a number)
+        for(let i = 0; i < rows.length; i++){
           const row = rows[i];
           if(!row) continue;
           const person   = row[1]; // col B
           const taskName = row[2]; // col C
-          if(!person || !taskName || typeof person !== 'string' || typeof taskName !== 'string') continue;
-          if(taskName.startsWith('=') || taskName.startsWith('S1') || taskName.startsWith('S2') || taskName.startsWith('S3')) continue;
-          // Person must look like a real name — starts with capital, no 'S1'/'S2'/'S3' prefix,
-          // not a task description, not a number
-          if(/^S[123]\s/i.test(person)) continue;
-          if(/^(Total|Spec|Artwork|Global|Regional|Position|Deviation|Change|Audit|Internal|Assembly|Finish|MC\s|Ingredient|Packaging|Component|Foreign|Proof|Oil|Bulk|Cosmetic|Supplement)/i.test(person)) continue;
-          if(/^\d/.test(person)) continue;
-          if(!person.match(/^[A-Z][a-z]/)) continue; // Must start with capital letter followed by lowercase
+          if(!person || !taskName) continue;
+          if(typeof person !== 'string' || typeof taskName !== 'string') continue;
+          // Task name must be a plain string task description (not formula, not header label)
+          if(taskName.startsWith('=')) continue;
+          if(/^(Est Qty|Description|SME|Run Time|Comments|Total|Router|Qty)$/i.test(taskName.trim())) continue;
+          if(/^\d+$/.test(taskName.trim())) continue; // pure number
+          // Task name must match a known KPI-relevant task type (from Router)
+          const isKPITask = /artwork.*upload|upload.*artwork|add.*artwork|assembly spec|finished product spec|fps|change control|fp spec|ft spec/i.test(taskName);
+          // Person must look like a real first name — letter-based, not S1/S2/S3 prefix
+          if(/^S[123]/i.test(person.trim())) continue;
+          if(/^(Total|SME|Description|Artwork|Global|Regional|Position|PTO|Specialist)/i.test(person.trim())) continue;
+          if(!/^[A-Za-z]/.test(person.trim())) continue;
 
           // Match schedule task name (from Router) to a KPI rule id
           // Router names like "MC Artwork Upload - Regional - PG" -> mc_artwork_upload
