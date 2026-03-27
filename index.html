@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- QMS Dashboard v4 - SOAP bridge - built 2026-03-27 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -205,14 +206,28 @@
 
     <div class="divider"></div>
 
-    <div class="card-title" style="margin-bottom:8px">Import Workfront Data (.xlsx)</div>
-    <div class="drop-zone" id="drop-zone-wf" onclick="document.getElementById('file-wf').click()">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text-subtle)" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-      <div class="drop-zone-text">Drop Workfront .xlsx export here</div>
-      <div class="drop-zone-sub">Expects columns: Task Name, Assigned To, Due Date, Status, Priority, Project</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:4px">
+      <div>
+        <div class="card-title" style="margin-bottom:6px">Workfront Tasks (.xlsx)</div>
+        <div class="drop-zone" id="drop-zone-wf" onclick="document.getElementById('file-wf').click()">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-subtle)" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <div class="drop-zone-text">Drop Workfront export here</div>
+          <div class="drop-zone-sub">Task Name · Assigned To · Due Date · Status · Priority</div>
+        </div>
+        <input type="file" id="file-wf" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleWFImport(this.files[0])">
+        <div id="wf-status" class="text-sm text-muted mt-1 hidden"></div>
+      </div>
+      <div>
+        <div class="card-title" style="margin-bottom:6px">MC Completed Tasks (.xlsx)</div>
+        <div class="drop-zone" id="drop-zone-mc" onclick="document.getElementById('file-mc').click()">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-subtle)" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <div class="drop-zone-text">Drop MC task history export here</div>
+          <div class="drop-zone-sub">Task Name · Completed By · Completion Date · Route</div>
+        </div>
+        <input type="file" id="file-mc" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleMCCompletedImport(this.files[0])">
+        <div id="mc-status" class="text-sm text-muted mt-1 hidden"></div>
+      </div>
     </div>
-    <input type="file" id="file-wf" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleWFImport(this.files[0])">
-    <div id="wf-status" class="text-sm text-muted mt-1 hidden"></div>
 
     <div class="divider"></div>
 
@@ -541,28 +556,37 @@ async function mcGetUserTasks(connectionID, username){
 
 // Map a raw MC task to our internal format
 function mapSoapTask(t, assignee){
-  // Derive status from available fields
-  let status = 'pending';
-  if(t.completedDate || t.completed) status = 'completed';
-  else if(t.type === 'approval' || t.routeStepType) status = 'in_progress';
+  // All tasks from getUsersTasks are active/pending — completed tasks come from report import
+  const status = 'in_progress';
 
-  // Due date: MC tasks don't always have one — use notificationdate as fallback
-  const dueDate = normalizeDate(t.dueDate || t.due_date || t.targetDate);
-  const notified = normalizeDate(t.notificationdate || t.launchdate);
+  // MC task steps don't have a due date — notificationdate = when it entered the queue
+  const queuedDate = normalizeDate(t.notificationdate || t.launchdate);
+  const launchDate = normalizeDate(t.launchdate);
+
+  // Build a direct MC link
+  const base = (state.settings.mcUrl || '').replace(/\/$/,'');
+  const rawLink = t.link || '';
+  // link is like "/doterra/main/index.cfm?event=showTask&ID=XXX"
+  // strip leading /doterra since our base already includes it, or use as-is if absolute
+  const mcLink = rawLink.startsWith('http') ? rawLink
+               : rawLink ? 'https://doterra.mastercontrol.com' + rawLink
+               : '';
 
   return {
-    id:       t.packetid || t.stepid || t.id || '',
-    title:    t.name || t.documentTitle || t.packetName || 'Unnamed Task',
-    assignee: assignee,
+    id:         t.packetid || t.stepid || t.id || '',
+    title:      t.name || t.documentTitle || t.packetName || 'Unnamed Task',
+    stepName:   t.stepname || '',
+    assignee:   assignee,
     status,
-    dueDate:  dueDate || notified,
-    priority: normalizePriority(t.priority || ''),
-    type:     t.type || t.taskType || 'MC Task',
-    workflow: t.routename || t.workflowName || '',
-    wfName:   t.routename || '',
-    stepName: t.stepname || '',
-    link:     t.link || '',
-    source:   'MasterControl',
+    queuedDate,   // when it entered the queue
+    launchDate,   // when the workflow started
+    dueDate:    null,   // MC task steps have no due date
+    priority:   normalizePriority(t.priority || ''),
+    type:       t.type || t.taskType || 'MC Task',
+    workflow:   t.routename || t.workflowName || '',
+    wfName:     t.routename || '',
+    mcLink,
+    source:     'MasterControl',
   };
 }
 
@@ -591,6 +615,10 @@ async function syncMasterControl(){
   }
 
   state.syncing = false;
+  // Always store something so debug window is never blank
+  if(Object.keys(_diag).length === 0){
+    _diag['_note'] = 'doSync() was never called — syncMasterControl caught an error before reaching doSync, or the old cached JS is still running.';
+  }
   render();
 }
 
@@ -694,6 +722,52 @@ function handleWFImport(file){
   reader.readAsArrayBuffer(file);
 }
 
+// MC Completed Tasks import handler
+function handleMCCompletedImport(file){
+  if(!file) return;
+  const el = document.getElementById('mc-status');
+  el.classList.remove('hidden'); el.style.color=''; el.textContent='Reading…';
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{
+      const wb = XLSX.read(e.target.result,{type:'array'});
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet);
+
+      const completed = rows.map((r,i)=>({
+        id:          r['Task ID']||r['ID']||r['Packet ID']||'MCH-'+(i+1),
+        title:       r['Task Name']||r['Document Title']||r['Name']||r['title']||'Unnamed',
+        stepName:    r['Step']||r['Step Name']||r['Task Type']||'',
+        assignee:    r['Completed By']||r['Assigned To']||r['User']||r['Username']||'',
+        status:      'completed',
+        dueDate:     null,
+        queuedDate:  null,
+        completedDate: normalizeDate(r['Completion Date']||r['Completed Date']||r['Date Completed']||r['Date']),
+        workflow:    r['Route']||r['Workflow']||r['Route Name']||'',
+        wfName:      r['Route']||r['Workflow']||r['Route Name']||'',
+        type:        r['Type']||r['Task Type']||'MC Completed',
+        priority:    normalizePriority(r['Priority']||''),
+        mcLink:      '',
+        source:      'MasterControl',
+      }));
+
+      // Store separately from live tasks
+      if(!state.mcCompletedData) state.mcCompletedData = {};
+      state.mcCompletedData = { tasks: completed, importedAt: new Date().toISOString() };
+      snapshotHistory();
+      persist();
+
+      el.style.color='var(--success)';
+      el.textContent=`✓ ${completed.length} completed tasks imported from "${file.name}"`;
+      render();
+    }catch(err){
+      el.style.color='var(--danger)';
+      el.textContent='✗ Could not parse: '+err.message;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
 // Drag-drop
 ['dragover','dragleave','drop'].forEach(ev=>{
   document.addEventListener('DOMContentLoaded',()=>{
@@ -709,9 +783,18 @@ function handleWFImport(file){
 // COMPUTED HELPERS
 // ─────────────────────────────────────────────
 function allTasks(){
-  const mc = (state.mcData?.docTasks||[]);
-  const wf = (state.wfData?.tasks||[]);
-  return [...mc,...wf];
+  const mc        = (state.mcData?.docTasks||[]);
+  const wf        = (state.wfData?.tasks||[]);
+  const mcDone    = (state.mcCompletedData?.tasks||[]);
+  return [...mc,...wf,...mcDone];
+}
+
+function pendingTasks(){
+  return allTasks().filter(t=>t.status!=='completed');
+}
+
+function completedTasks(){
+  return allTasks().filter(t=>t.status==='completed');
 }
 
 function getKPIs(){
@@ -854,7 +937,7 @@ function renderTeam(){
 
   ${state.syncError ? `<div class="alert alert-warn">${state.syncError} <button class="btn btn-sm" style="margin-left:8px" onclick="showDiag()">Debug last sync ↗</button></div>` : ''}
   ${state.lastSync==='demo mode' ? `<div class="alert alert-info">Showing demo data. Add your MC API token in Settings to load live data.</div>` : ''}
-  ${state.lastSync && state.lastSync!=='demo mode' && !state.syncError ? `<div class="alert alert-info" style="display:flex;align-items:center;gap:10px">Live MC data loaded. If tasks are missing, check field mapping. <button class="btn btn-sm" onclick="showDiag()">Debug API responses ↗</button></div>` : ''}
+  <div class="alert alert-info" style="display:flex;align-items:center;gap:10px">Last sync: ${state.lastSync||'never'}. Tasks found: ${allTasks().length}. <button class="btn btn-sm" onclick="showDiag()">Debug API responses ↗</button></div>
 
   <div class="status-bar">
     <div class="status-item">
@@ -972,28 +1055,43 @@ function getUpcomingTasks(){
 
 function renderTaskTable(tasks, showSource=true){
   if(!tasks.length) return '<div class="text-muted text-sm" style="padding:12px 4px">No tasks found.</div>';
+  // Determine if any tasks have a real due date (Workfront) or only a queued date (MC)
+  const hasRealDue = tasks.some(t => t.dueDate);
   return `
   <div style="overflow-x:auto">
   <table class="data-table">
     <thead><tr>
-      <th>ID</th><th>Task</th><th>Assignee</th><th>Due</th><th>Priority</th><th>Status</th>
+      <th>Task</th><th>Step / Type</th><th>Assignee</th>
+      <th>${hasRealDue ? 'Due' : 'In Queue Since'}</th>
+      <th>Status</th>
       ${showSource?'<th>Source</th>':''}
+      <th></th>
     </tr></thead>
     <tbody>
-      ${tasks.map(t=>`
-      <tr class="${isOverdue(t)?'overdue-row':''}">
-        <td class="text-xs text-subtle">${t.id||'—'}</td>
-        <td>
-          <span class="font-medium">${t.title}</span>
-          ${isOverdue(t)?'<span class="badge badge-danger" style="margin-left:6px;font-size:10px">Overdue</span>':''}
-          ${t.wfName&&t.wfName!==t.title?`<div class="text-xs text-subtle" style="margin-top:2px">${t.wfName}</div>`:''}
-        </td>
-        <td>${t.assignee||'—'}</td>
-        <td style="${isOverdue(t)?'color:var(--danger)':''}" class="text-sm">${formatDate(t.dueDate)}</td>
-        <td>${priorityBadge(t.priority)}</td>
-        <td>${statusBadge(t.status)}</td>
-        ${showSource?`<td><span class="tag">${t.source||'MC'}</span></td>`:''}
-      </tr>`).join('')}
+      ${tasks.map(t=>{
+        const isOD = isOverdue(t);
+        const displayDate = t.dueDate ? formatDate(t.dueDate)
+                          : t.queuedDate ? formatDate(t.queuedDate)
+                          : '—';
+        const dateStyle = isOD ? 'color:var(--danger)' : '';
+        const titleHtml = t.mcLink
+          ? `<a href="${t.mcLink}" target="_blank" style="color:var(--text);text-decoration:none;font-weight:500" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">${t.title} <span style="font-size:10px;opacity:.5">↗</span></a>`
+          : `<span class="font-medium">${t.title}</span>`;
+        return `
+        <tr class="${isOD?'overdue-row':''}">
+          <td>
+            ${titleHtml}
+            ${isOD?'<span class="badge badge-danger" style="margin-left:6px;font-size:10px">Overdue</span>':''}
+            ${t.wfName&&t.wfName!==t.title?`<div class="text-xs text-subtle" style="margin-top:2px">${t.wfName}</div>`:''}
+          </td>
+          <td class="text-xs text-muted">${t.stepName||t.type||'—'}</td>
+          <td>${t.assignee||'—'}</td>
+          <td class="text-sm" style="${dateStyle}">${displayDate}</td>
+          <td>${statusBadge(t.status)}</td>
+          ${showSource?`<td><span class="tag">${t.source||'MC'}</span></td>`:''}
+          <td>${t.mcLink?`<a href="${t.mcLink}" target="_blank" class="btn btn-sm" style="font-size:11px;padding:3px 8px">Open ↗</a>`:''}</td>
+        </tr>`;
+      }).join('')}
     </tbody>
   </table>
   </div>`;
@@ -1128,10 +1226,14 @@ function renderMember(name){
     overdue:  Math.max(0,Math.round(h.overdueCount/Math.max(1,state.settings.members.length)+(Math.random()-.5))),
   }));
 
+  const memberCompleted = (state.mcCompletedData?.tasks||[]).filter(t=>
+    normName(t.assignee)===normName(name)
+  );
+
   const sorted = s.tasks.slice().sort((a,b)=>{
     if(isOverdue(a)&&!isOverdue(b)) return -1;
     if(!isOverdue(a)&&isOverdue(b)) return 1;
-    return new Date(a.dueDate)-new Date(b.dueDate);
+    return new Date(a.queuedDate||0)-new Date(b.queuedDate||0);
   });
 
   return `
@@ -1146,32 +1248,44 @@ function renderMember(name){
       <div class="avatar" style="width:44px;height:44px;font-size:15px;background:${mc.bg};color:${mc.color}">${initials(name)}</div>
       <div>
         <div class="page-title">${name}</div>
-        <div class="page-subtitle">${s.overdue>0?s.overdue+' overdue item(s) need attention':'All tasks on track'}</div>
+        <div class="page-subtitle">${s.pending} active tasks &middot; ${memberCompleted.length} completed on record</div>
       </div>
     </div>
   </div>
 
   <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
-    <div class="kpi-card"><div class="kpi-label">Pending</div><div class="kpi-value" style="color:var(--accent)">${s.pending}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Completed</div><div class="kpi-value" style="color:var(--success)">${s.completed}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Active Tasks</div><div class="kpi-value" style="color:var(--accent)">${s.pending}</div><div class="kpi-delta neutral">currently in queue</div></div>
+    <div class="kpi-card"><div class="kpi-label">Completed</div><div class="kpi-value" style="color:var(--success)">${memberCompleted.length}</div><div class="kpi-delta neutral">from MC report</div></div>
     <div class="kpi-card"><div class="kpi-label">Overdue</div><div class="kpi-value" style="color:${s.overdue>0?'var(--danger)':'var(--success)'}">${s.overdue}</div></div>
-    <div class="kpi-card"><div class="kpi-label">Completion Rate</div><div class="kpi-value">${pct}%</div></div>
+    <div class="kpi-card"><div class="kpi-label">Workflows</div>
+      <div class="kpi-value">${[...new Set(sorted.map(t=>t.workflow).filter(Boolean))].length||s.pending}</div>
+      <div class="kpi-delta neutral">${[...new Set(sorted.map(t=>t.workflow).filter(Boolean))].slice(0,2).join(', ')||'various'}</div>
+    </div>
   </div>
 
   <div class="full-row card">
     <div class="card-header">
-      <div><div class="card-title">Completion History</div><div class="card-subtitle">Tasks completed per week</div></div>
+      <div><div class="card-title">Completion History</div><div class="card-subtitle">Per week from imported MC report</div></div>
     </div>
     <div class="chart-wrap" style="height:170px"><canvas id="chart-member-hist"></canvas></div>
     <script>window.__memberHist=${JSON.stringify({hist:memberH,color:mc.color,bg:mc.bg})};<\/script>
+    ${!memberCompleted.length ? '<div class="text-subtle text-sm" style="padding:8px 4px 0">Import an MC completed tasks report via Settings to populate this chart.</div>' : ''}
   </div>
 
   <div class="full-row card">
     <div class="card-header">
-      <div><div class="card-title">Assigned Tasks</div><div class="card-subtitle">${s.tasks.length} total</div></div>
+      <div><div class="card-title">Active Tasks</div><div class="card-subtitle">${sorted.length} currently in queue</div></div>
     </div>
-    ${renderTaskTable(sorted,true)}
-  </div>`;
+    ${renderTaskTable(sorted, true)}
+  </div>
+
+  ${memberCompleted.length ? `<div class="full-row card" style="margin-top:14px">
+    <div class="card-header">
+      <div><div class="card-title">Completed Tasks</div><div class="card-subtitle">${memberCompleted.length} from imported MC report</div></div>
+    </div>
+    ${renderTaskTable(memberCompleted.slice().sort((a,b)=>new Date(b.completedDate||0)-new Date(a.completedDate||0)), true)}
+  </div>` : ''}
+  `;
 }
 
 // ─────────────────────────────────────────────
