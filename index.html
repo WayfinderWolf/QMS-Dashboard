@@ -941,11 +941,14 @@ function getMemberSummary(name){
   const tasks = allTasks().filter(t=>t.assignee===name||normName(t.assignee)===normName(name));
   const now = new Date(); now.setHours(0,0,0,0);
   const od = t => t.status!=='completed' && t.dueDate && new Date(t.dueDate)<now;
+  const activeTasks    = tasks.filter(t=>t.status==='pending'||t.status==='in_progress');
+  const completedTasks = tasks.filter(t=>t.status==='completed');
   return {
-    pending:   tasks.filter(t=>t.status==='pending'||t.status==='in_progress').length,
-    completed: tasks.filter(t=>t.status==='completed').length,
-    overdue:   tasks.filter(od).length,
-    tasks,
+    pending:        activeTasks.length,
+    completed:      completedTasks.length,
+    overdue:        tasks.filter(od).length,
+    tasks:          activeTasks,    // Active Tasks table only shows active
+    allTasks:       tasks,          // Full list for other uses
   };
 }
 
@@ -1153,7 +1156,7 @@ function renderTeam(){
             <div class="member-stat"><div class="member-stat-val" style="color:var(--success)">${s.completed}</div><div class="member-stat-lbl">Done</div></div>
             <div class="member-stat"><div class="member-stat-val">${s.tasks.length}</div><div class="member-stat-lbl">Total</div></div>
           </div>
-          <div class="progress-bar"><div class="progress-fill" style="width:${s.tasks.length?Math.round(s.completed/s.tasks.length*100):0}%;background:${mc.color}"></div></div>
+          <div class="progress-bar"><div class="progress-fill" style="width:${s.allTasks.length?Math.round(s.completed/s.allTasks.length*100):0}%;background:${mc.color}"></div></div>
         </div>`;
       }).join('')}
     </div>
@@ -1274,18 +1277,18 @@ function renderMember(name){
       <div class="avatar" style="width:44px;height:44px;font-size:15px;background:${mc.bg};color:${mc.color}">${initials(name)}</div>
       <div>
         <div class="page-title">${name}</div>
-        <div class="page-subtitle">${s.pending} active tasks &middot; ${memberCompleted.length} completed on record</div>
+        <div class="page-subtitle">${s.pending} active tasks &middot; ${s.completed + memberCompleted.length} completed on record</div>
       </div>
     </div>
   </div>
 
   <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
     <div class="kpi-card"><div class="kpi-label">Active Tasks</div><div class="kpi-value" style="color:var(--accent)">${s.pending}</div><div class="kpi-delta neutral">currently in queue</div></div>
-    <div class="kpi-card"><div class="kpi-label">Completed</div><div class="kpi-value" style="color:var(--success)">${memberCompleted.length}</div><div class="kpi-delta neutral">from MC report</div></div>
+    <div class="kpi-card"><div class="kpi-label">Completed</div><div class="kpi-value" style="color:var(--success)">${s.completed + memberCompleted.length}</div><div class="kpi-delta neutral">${s.completed} imported · ${memberCompleted.length} MC report</div></div>
     <div class="kpi-card"><div class="kpi-label">Overdue</div><div class="kpi-value" style="color:${s.overdue>0?'var(--danger)':'var(--success)'}">${s.overdue}</div></div>
     <div class="kpi-card"><div class="kpi-label">Workflows</div>
-      <div class="kpi-value">${[...new Set(sorted.map(t=>t.workflow).filter(Boolean))].length||s.pending}</div>
-      <div class="kpi-delta neutral">${[...new Set(sorted.map(t=>t.workflow).filter(Boolean))].slice(0,2).join(', ')||'various'}</div>
+      <div class="kpi-value">${[...new Set(s.allTasks.map(t=>t.workflow).filter(Boolean))].length||s.pending}</div>
+      <div class="kpi-delta neutral">${[...new Set(s.allTasks.map(t=>t.workflow).filter(Boolean))].slice(0,2).join(', ')||'various'}</div>
     </div>
   </div>
 
