@@ -571,15 +571,8 @@ function mapSoapTask(t, assignee){
 
   // Build MC link using viewPacket — accessible to doc admins regardless of task assignment
   // Falls back to the original showTask link from the API if packetid unavailable
-  const packetId = t.packetid || t.packetId || '';
-  const rawLink  = t.link || '';
-  // Use the original showTask link from the API — it works when opened directly in browser
-  // even for non-assignees who have doc admin rights (MC checks rights on page load)
-  const mcLink = packetId
-    ? `https://doterra.mastercontrol.com/doterra/main/index.cfm?event=showTask&ID=${packetId}`
-    : rawLink.startsWith('http') ? rawLink
-    : rawLink ? 'https://doterra.mastercontrol.com' + rawLink
-    : '';
+  // MC uses JS-driven navigation with no direct packet URLs — no link available
+  const mcLink = '';
 
   return {
     id:         t.packetid || t.stepid || t.id || '',
