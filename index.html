@@ -2166,18 +2166,25 @@ function handleScheduleImport(file){
   const reader = new FileReader();
   reader.onload = e => {
     try{
-            const wb = XLSX.read(e.target.result, {type:'array', cellFormula:false, cellNF:false}); const assignments = [];
+            const wb = XLSX.read(e.target.result, {type:'array', cellFormula:false, cellNF:false});
+      const assignments = [];
+      const debugInfo = [];
 
       // Parse each sheet that looks like a schedule (has SME/Description header)
       wb.SheetNames.forEach(sheetName => {
         const ws = wb.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
+        const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:false});
 
-        // Find header row (contains 'SME' and 'Description')
+        debugInfo.push({sheet: sheetName, rows4to7: rows.slice(3,7)});
+
+        // Find header row — look for 'SME' and 'Description' in any cell
         let headerRow = -1;
         rows.forEach((row, i) => {
-          if(row && row.some(v => v === 'SME') && row.some(v => v === 'Description')) headerRow = i;
+          if(!row) return;
+          const vals = row.map(v => String(v||'').trim());
+          if(vals.includes('SME') && vals.includes('Description')) headerRow = i;
         });
+        debugInfo[debugInfo.length-1].headerRow = headerRow;
         if(headerRow < 0) return;
 
         // Get week date from row 1 (e.g. "Mar 23rd-27th")
@@ -2224,9 +2231,13 @@ function handleScheduleImport(file){
 
       state.scheduleData = assignments;
       persist();
+      console.log('Schedule debug:', debugInfo);
+      console.log('Assignments found:', assignments);
       if(el){
-        el.style.color = 'var(--success)';
-        el.textContent = `✓ ${assignments.length} assignments loaded from "${file.name}"`;
+        el.style.color = assignments.length > 0 ? 'var(--success)' : 'var(--warning)';
+        el.textContent = assignments.length > 0
+          ? `✓ ${assignments.length} assignments loaded from "${file.name}"`
+          : `⚠ 0 assignments found — check console for debug info`;
         document.getElementById('sched-clear')?.classList.remove('hidden');
       }
       render();
