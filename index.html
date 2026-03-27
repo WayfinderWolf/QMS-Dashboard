@@ -1181,6 +1181,1697 @@ function renderTeam(){
     </div>
   </div>
 
+  <div style="display:grid;grid-template-columns:1fr 2fr;gap:14px;margin-bottom:14px">
+    <div class="card">
+      <div class="card-header"><div><div class="card-title">Task Status</div><div class="card-subtitle">${periodLabel()} · MC + Workfront</div></div></div>
+      <div class="chart-wrap" style="height:190px"><canvas id="chart-status"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div><div class="card-title">Workload by Member</div><div class="card-subtitle">Active tasks — current queue</div></div></div>
+      <div class="chart-wrap" style="height:${Math.max(190, state.settings.members.length * 38 + 40)}px"><canvas id="chart-workload"></canvas></div>
+    </div>
+  </div>
+
+  <div class="full-row card">
+    <div class="card-header">
+      <div><div class="card-title">Team Members</div><div class="card-subtitle">Click to open individual view</div></div>
+    </div>
+    <div class="member-grid">
+      ${state.settings.members.map((name,i)=>{
+        const s=getMemberSummary(name); const mc=memberColor(i);
+        return `
+        <div class="member-card" onclick="showMember('${name}')">
+          <div class="member-header">
+            <div class="avatar" style="background:${mc.bg};color:${mc.color}">${initials(name)}</div>
+            <div>
+              <div class="member-name">${name}</div>
+              <div class="member-role">${s.overdue>0?'<span style="color:var(--danger)">⚠ '+s.overdue+' overdue</span>':'<span style="color:var(--success)">On track</span>'}</div>
+            </div>
+            ${s.overdue>0?`<div class="ml-auto"><span class="badge badge-danger">${s.overdue}</span></div>`:''}
+          </div>
+          <div class="member-stats">
+            <div class="member-stat"><div class="member-stat-val" style="color:var(--accent)">${s.pending}</div><div class="member-stat-lbl">Pending</div></div>
+            <div class="member-stat"><div class="member-stat-val" style="color:var(--success)">${s.completed}</div><div class="member-stat-lbl">Done</div></div>
+            <div class="member-stat"><div class="member-stat-val">${s.pending+s.completed}</div><div class="member-stat-lbl">Total</div></div>
+          </div>
+          <div class="progress-bar"><div class="progress-fill" style="width:${(s.pending+s.completed)?Math.round(s.completed/(s.pending+s.completed)*100):0}%;background:${mc.color}"></div></div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>
+
+  <div class="full-row card">
+    <div class="card-header">
+      <div><div class="card-title">Upcoming &amp; Overdue</div><div class="card-subtitle">Due within 14 days + all overdue items</div></div>
+      <button class="btn btn-sm" onclick="showView('tasks')">View all →</button>
+    </div>
+    ${renderTaskTable(getUpcomingTasks(),true)}
+  </div>`;
+}
+
+function getUpcomingTasks(){
+  const now=new Date(); now.setHours(0,0,0,0);
+  const fwd=new Date(now); fwd.setDate(fwd.getDate()+14);
+  return allTasks().filter(t=>{
+    if(t.status==='completed') return false;
+    // Use dueDate, plannedStart, or queuedDate — whichever is available
+    const dateToCheck = t.dueDate || t.plannedStart || t.queuedDate;
+    if(!dateToCheck) return false;
+    const d = new Date(dateToCheck);
+    return d < fwd;
+  }).sort((a,b)=>{
+    const da = new Date(a.dueDate||a.plannedStart||a.queuedDate||0);
+    const db = new Date(b.dueDate||b.plannedStart||b.queuedDate||0);
+    return da - db;
+  }).slice(0,12);
+}
+
+function renderTaskTable(tasks, showSource=true){
+  if(!tasks.length) return '<div class="text-muted text-sm" style="padding:12px 4px">No tasks found.</div>';
+  return `
+  <div style="overflow-x:auto">
+  <table class="data-table">
+    <thead><tr>
+      <th>Task</th><th>Step / Type</th><th>Assignee</th>
+      <th>Source</th>
+      <th>Date</th>
+      <th>Status</th>
+      ${showSource?'<th>System</th>':''}
+      <th></th>
+    </tr></thead>
+    <tbody>
+      ${tasks.map(t=>{
+        const isOD = isOverdue(t);
+        const taskLink = t.mcLink || t.wfLink || '';
+        // Date: prefer dueDate, then plannedStart, then queuedDate
+        const displayDate = t.dueDate      ? formatDate(t.dueDate)
+                          : t.plannedStart ? formatDate(t.plannedStart)
+                          : t.queuedDate   ? formatDate(t.queuedDate)
+                          : '—';
+        const dateSub = !t.dueDate && t.plannedStart ? '<span class="text-subtle" style="font-size:10px;display:block">planned start</span>'
+                      : !t.dueDate && t.queuedDate   ? '<span class="text-subtle" style="font-size:10px;display:block">in queue since</span>'
+                      : '';
+        const dateStyle = isOD ? 'color:var(--danger)' : '';
+        const titleHtml = taskLink
+          ? `<a href="${taskLink}" target="_blank" style="color:var(--text);text-decoration:none;font-weight:500" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">${t.title} <span style="font-size:10px;opacity:.5">↗</span></a>`
+          : `<span class="font-medium">${t.title}</span>`;
+        // Source: wfSource (Queue Topic / Project Name) for WF, route name for MC
+        const sourceDisplay = t.wfSource || t.workflow || '—';
+        const sourceLink    = t.projectLink || '';
+        const sourceHtml = sourceLink
+          ? `<a href="${sourceLink}" target="_blank" style="color:var(--text-muted);font-size:12px;text-decoration:none" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text-muted)'">${sourceDisplay} <span style="font-size:10px;opacity:.5">↗</span></a>`
+          : `<span class="text-sm text-muted">${sourceDisplay}</span>`;
+        return `
+        <tr class="${isOD?'overdue-row':''}">
+          <td>
+            ${titleHtml}
+            ${isOD?'<span class="badge badge-danger" style="margin-left:6px;font-size:10px">Overdue</span>':''}
+          </td>
+          <td class="text-xs text-muted">${t.stepName||t.type||'—'}</td>
+          <td>${t.assignee||'—'}</td>
+          <td>${sourceHtml}</td>
+          <td class="text-sm" style="${dateStyle}">${displayDate}${dateSub}</td>
+          <td>${statusBadge(t.status)}</td>
+          ${showSource?`<td><span class="tag">${t.source||'MC'}</span></td>`:''}
+          <td>${taskLink?`<a href="${taskLink}" target="_blank" class="btn btn-sm" style="font-size:11px;padding:3px 8px">Open ↗</a>`:''}</td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>
+  </div>`;
+}
+
+// ── TRENDS ──
+function renderTrends(){
+  const h=state.history;
+  const prevW  = h.length>=2  ? h[h.length-2]  : null;
+  const prevM  = h.length>=5  ? h[h.length-5]  : null;
+  const prevY  = h.length>=53 ? h[0]            : null;
+  const cur    = h.length     ? h[h.length-1]   : null;
+  function chip(cur,prev,field,lowerBetter=false){
+    if(!prev||cur===null) return '';
+    const d=Math.round((cur[field]||0)-(prev[field]||0));
+    if(d===0) return '';
+    const good=lowerBetter?d<0:d>0;
+    return `<span class="badge ${good?'badge-success':'badge-danger'}" style="font-size:10px">${d>0?'+':''}${d}</span>`;
+  }
+  return `
+  <div class="page-header">
+    <div><div class="page-title">Trends</div><div class="page-subtitle">${h.length}-week rolling history — MC + Workfront</div></div>
+  </div>
+  <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
+    <div class="kpi-card">
+      <div class="kpi-label">Completed Tasks</div>
+      <div class="kpi-value" style="color:var(--success)">${cur?cur.docCompleted:0}</div>
+      <div class="kpi-delta neutral" style="gap:6px;flex-wrap:wrap">
+        ${chip(cur,prevW,'docCompleted')} vs last week
+        ${prevM?chip(cur,prevM,'docCompleted')+' vs last month':''}
+        ${prevY?chip(cur,prevY,'docCompleted')+' vs last year':''}
+      </div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Pending Tasks</div>
+      <div class="kpi-value" style="color:var(--accent)">${cur?cur.docPending:0}</div>
+      <div class="kpi-delta neutral" style="gap:6px;flex-wrap:wrap">
+        ${chip(cur,prevW,'docPending',true)} vs last week
+        ${prevM?chip(cur,prevM,'docPending',true)+' vs last month':''}
+      </div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Overdue Items</div>
+      <div class="kpi-value" style="color:${(cur?.overdueCount||0)>0?'var(--danger)':'var(--success)'}">${cur?cur.overdueCount:0}</div>
+      <div class="kpi-delta neutral" style="gap:6px;flex-wrap:wrap">
+        ${chip(cur,prevW,'overdueCount',true)} vs last week
+        ${prevM?chip(cur,prevM,'overdueCount',true)+' vs last month':''}
+      </div>
+    </div>
+  </div>
+  <div class="two-col">
+    <div class="card">
+      <div class="card-header"><div><div class="card-title">Task Completion Velocity</div><div class="card-subtitle">Completed per week — all sources</div></div></div>
+      <div class="chart-wrap" style="height:210px"><canvas id="chart-velocity"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div><div class="card-title">Overdue Count</div><div class="card-subtitle">Weekly snapshot — lower is better</div></div></div>
+      <div class="chart-wrap" style="height:210px"><canvas id="chart-overdue"></canvas></div>
+    </div>
+  </div>
+  <div class="full-row card">
+    <div class="card-header"><div><div class="card-title">Pending vs Completed</div><div class="card-subtitle">Weekly stacked view</div></div></div>
+    <div class="chart-wrap" style="height:220px"><canvas id="chart-pending"></canvas></div>
+  </div>`;
+}
+
+// ── ALL TASKS ──
+function renderAllTasks(){
+  const tasks = allTasks().sort((a,b)=>{
+    if(isOverdue(a)&&!isOverdue(b)) return -1;
+    if(!isOverdue(a)&&isOverdue(b)) return 1;
+    const da=new Date(a.dueDate||a.plannedStart||a.queuedDate||0);
+    const db=new Date(b.dueDate||b.plannedStart||b.queuedDate||0);
+    return da-db;
+  });
+  return `
+  <div class="page-header">
+    <div><div class="page-title">All Tasks</div><div class="page-subtitle">${tasks.length} items across all sources</div></div>
+    <div class="header-actions">
+      <select class="btn btn-sm" id="filt-status" onchange="applyFilters()" style="cursor:pointer">
+        <option value="">All statuses</option>
+        <option value="pending">Pending</option>
+        <option value="in_progress">In Progress</option>
+        <option value="completed">Completed</option>
+      </select>
+      <select class="btn btn-sm" id="filt-member" onchange="applyFilters()" style="cursor:pointer">
+        <option value="">All members</option>
+        ${state.settings.members.map(m=>`<option value="${m}">${m}</option>`).join('')}
+      </select>
+      <select class="btn btn-sm" id="filt-source" onchange="applyFilters()" style="cursor:pointer">
+        <option value="">All sources</option>
+        <option value="MasterControl">MasterControl</option>
+        <option value="WF Task">Workfront Tasks</option>
+        <option value="WF Issue">Workfront Issues</option>
+      </select>
+    </div>
+  </div>
+  <div class="card">
+    <div id="task-wrap">${renderTaskTable(tasks,true)}</div>
+  </div>`;
+}
+
+function applyFilters(){
+  const status = document.getElementById('filt-status')?.value;
+  const member = document.getElementById('filt-member')?.value;
+  const source = document.getElementById('filt-source')?.value;
+  let tasks = allTasks();
+  if(status) tasks = tasks.filter(t => t.status === status);
+  if(member) tasks = tasks.filter(t => normName(t.assignee) === normName(member));
+  if(source) tasks = tasks.filter(t => t.source === source);
+  tasks.sort((a,b)=>{
+    if(isOverdue(a)&&!isOverdue(b)) return -1;
+    if(!isOverdue(a)&&isOverdue(b)) return 1;
+    const da=new Date(a.dueDate||a.plannedStart||a.queuedDate||0);
+    const db=new Date(b.dueDate||b.plannedStart||b.queuedDate||0);
+    return da-db;
+  });
+  const wrap = document.getElementById('task-wrap');
+  if(wrap) wrap.innerHTML = renderTaskTable(tasks, true);
+}
+
+function renderMember(name){
+  if(!name) return renderTeam();
+  const s  = getMemberSummary(name);
+  const mi = state.settings.members.findIndex(m=>normName(m)===normName(name));
+  const mc = memberColor(mi<0?0:mi);
+  const pct= s.tasks.length?Math.round(s.completed/s.tasks.length*100):0;
+
+  // Build real per-member completion history from ALL imported sources
+  const memberDoneWF = (state.wfData?.tasks||[]).filter(t=>
+    t.status==='completed' && normName(t.assignee)===normName(name) && t.completedDate
+  );
+  const memberDoneMC = (state.mcCompletedData?.tasks||[]).filter(t=>
+    normName(t.assignee)===normName(name) && t.completedDate
+  );
+  const memberDoneTasks = [...memberDoneWF, ...memberDoneMC];
+
+  // Build a simple weekly chart from the last 13 weeks using real completedDate values
+  const now = new Date(); now.setHours(23,59,59,0);
+  const memberH = [];
+  for(let w=12; w>=0; w--){
+    const weekEnd   = new Date(now); weekEnd.setDate(weekEnd.getDate() - w*7);
+    const weekStart = new Date(weekEnd); weekStart.setDate(weekStart.getDate()-6);
+    const label = weekEnd.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+    const count = memberDoneTasks.filter(t=>{
+      const d = new Date(t.completedDate);
+      return !isNaN(d) && d >= weekStart && d <= weekEnd;
+    }).length;
+    memberH.push({ date: label, completed: count });
+  }
+
+  const memberCompleted = (state.mcCompletedData?.tasks||[]).filter(t=>
+    normName(t.assignee)===normName(name)
+  );
+
+  const sorted = s.tasks.slice().sort((a,b)=>{
+    if(isOverdue(a)&&!isOverdue(b)) return -1;
+    if(!isOverdue(a)&&isOverdue(b)) return 1;
+    return new Date(a.queuedDate||0)-new Date(b.queuedDate||0);
+  });
+
+  return `
+  <div class="detail-header">
+    <span class="back-btn" onclick="showView('team')">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="10 14 4 8 10 2"/></svg>
+      Team Overview
+    </span>
+  </div>
+  <div class="page-header">
+    <div class="flex items-center gap-2">
+      <div class="avatar" style="width:44px;height:44px;font-size:15px;background:${mc.bg};color:${mc.color}">${initials(name)}</div>
+      <div>
+        <div class="page-title">${name}</div>
+        <div class="page-subtitle">${s.pending} active tasks &middot; ${s.completed + memberCompleted.length} completed on record</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+    <div class="kpi-card"><div class="kpi-label">Active Tasks</div><div class="kpi-value" style="color:var(--accent)">${s.pending}</div><div class="kpi-delta neutral">currently in queue</div></div>
+    <div class="kpi-card"><div class="kpi-label">Completed</div><div class="kpi-value" style="color:var(--success)">${s.completed + memberCompleted.length}</div><div class="kpi-delta neutral">${s.completed} imported · ${memberCompleted.length} MC report</div></div>
+    <div class="kpi-card"><div class="kpi-label">Overdue</div><div class="kpi-value" style="color:${s.overdue>0?'var(--danger)':'var(--success)'}">${s.overdue}</div></div>
+    <div class="kpi-card"><div class="kpi-label">Workflows</div>
+      <div class="kpi-value">${[...new Set(s.allTasks.map(t=>t.workflow).filter(Boolean))].length||s.pending}</div>
+      <div class="kpi-delta neutral">${[...new Set(s.allTasks.map(t=>t.workflow).filter(Boolean))].slice(0,2).join(', ')||'various'}</div>
+    </div>
+  </div>
+
+  <div class="full-row card">
+    <div class="card-header">
+      <div><div class="card-title">Completion History</div><div class="card-subtitle">Tasks closed per week — MC + Workfront</div></div>
+    </div>
+    <div class="chart-wrap" style="height:170px"><canvas id="chart-member-hist"></canvas></div>
+    <div id='member-hist-data' style='display:none'>${JSON.stringify({hist:memberH,color:mc.color,bg:mc.bg}).replace(/</g,'&lt;')}</div>
+    ${memberH.every(w=>w.completed===0) ? '<div class="text-subtle text-sm" style="padding:8px 4px 0">Import completed task reports via Settings to populate this chart.</div>' : ''}
+  </div>
+
+  <div class="full-row card">
+    <div class="card-header">
+      <div><div class="card-title">Active Tasks</div><div class="card-subtitle">${sorted.length} tasks · ${periodLabel()}</div></div>
+    </div>
+    ${renderTaskTable(sorted, true)}
+  </div>
+
+  ${memberCompleted.length ? `<div class="full-row card" style="margin-top:14px">
+    <div class="card-header">
+      <div><div class="card-title">Completed Tasks</div><div class="card-subtitle">${memberCompleted.length} MC report · ${memberDoneWF.length} Workfront</div></div>
+    </div>
+    ${renderTaskTable(memberCompleted.slice().sort((a,b)=>new Date(b.completedDate||0)-new Date(a.completedDate||0)), true)}
+  </div>` : ''}
+  `;
+}
+
+// ─────────────────────────────────────────────
+// CHARTS
+// ─────────────────────────────────────────────
+const charts={};
+function destroyChart(id){ if(charts[id]){charts[id].destroy();delete charts[id];} }
+function isDark(){ return window.matchMedia('(prefers-color-scheme:dark)').matches; }
+function gridClr(){ return isDark()?'rgba(255,255,255,.06)':'rgba(0,0,0,.06)'; }
+function txtClr(){  return isDark()?'#9b9a94':'#888780'; }
+
+function mkChart(id,cfg){
+  destroyChart(id);
+  const el=document.getElementById(id);
+  if(!el) return;
+  charts[id]=new Chart(el,cfg);
+}
+
+function scalesXY(){ return {
+  y:{grid:{color:gridClr()},ticks:{color:txtClr(),font:{size:11}}},
+  x:{grid:{display:false},ticks:{color:txtClr(),font:{size:11},maxTicksLimit:8}}
+};}
+
+function attachCharts(){
+  const v=state.currentView;
+  if(v==='team'){
+    buildStatusChart(); buildWorkloadChart();
+  } else if(v==='trends'){
+    buildVelocityChart(); buildOverdueChart(); buildPendingChart();
+  } else if(v==='member'){
+    buildMemberHistChart();
+  }
+}
+
+function buildStatusChart(){
+  const tasks=tasksForPeriod();
+  const pending=tasks.filter(t=>t.status==='pending').length;
+  const inProg=tasks.filter(t=>t.status==='in_progress').length;
+  const done=tasks.filter(t=>t.status==='completed').length;
+  const od=tasks.filter(t=>isOverdue(t)).length;
+  mkChart('chart-status',{type:'doughnut',
+    data:{labels:['Completed','In Progress','Pending','Overdue'],
+      datasets:[{data:[done,inProg,pending,od],backgroundColor:['#5a8f28','#2472b8','#888780','#c44040'],borderWidth:0,hoverOffset:4}]},
+    options:{responsive:true,maintainAspectRatio:false,cutout:'65%',plugins:{legend:{display:false}}}
+  });
+}
+
+function buildWorkloadChart(){
+  const members = state.settings.members;
+  const pending  = members.map(m => getMemberSummary(m).pending);
+  // Use full names on horizontal axis — much more readable with many members
+  mkChart('chart-workload',{type:'bar',
+    data:{
+      labels: members,
+      datasets:[{
+        data: pending,
+        backgroundColor: members.map((_,i) => MEMBER_COLORS[i % MEMBER_COLORS.length].color),
+        borderRadius: 4,
+        borderWidth: 0,
+      }]
+    },
+    options:{
+      indexAxis: 'y',   // horizontal bar
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins:{ legend:{ display:false } },
+      scales:{
+        x:{ grid:{color:gridClr()}, ticks:{color:txtClr(),font:{size:11}}, beginAtZero:true },
+        y:{ grid:{display:false},   ticks:{color:txtClr(),font:{size:12}}, },
+      }
+    }
+  });
+}
+
+function buildVelocityChart(){
+  const h=state.history;
+  mkChart('chart-velocity',{type:'line',
+    data:{labels:h.map(x=>x.date),datasets:[{label:'Completed',data:h.map(x=>x.docCompleted),
+      borderColor:'#5a8f28',backgroundColor:'rgba(90,143,40,.08)',fill:true,tension:.4,pointRadius:3,borderWidth:2}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:scalesXY()}
+  });
+}
+
+function buildOverdueChart(){
+  const h=state.history;
+  mkChart('chart-overdue',{type:'bar',
+    data:{labels:h.map(x=>x.date),datasets:[{data:h.map(x=>x.overdueCount),
+      backgroundColor:h.map(x=>x.overdueCount>3?'#c44040':'#e8a044'),borderRadius:3,borderWidth:0}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:scalesXY()}
+  });
+}
+
+function buildPendingChart(){
+  const h=state.history;
+  mkChart('chart-pending',{type:'bar',
+    data:{labels:h.map(x=>x.date),datasets:[
+      {label:'Completed',data:h.map(x=>x.docCompleted),backgroundColor:'#5a8f28',borderRadius:3,borderWidth:0,stack:'s'},
+      {label:'Pending',  data:h.map(x=>x.docPending),  backgroundColor:'#2472b8',borderRadius:3,borderWidth:0,stack:'s'},
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:true,position:'top',labels:{font:{size:11},color:txtClr(),boxWidth:10,boxHeight:10}}},
+      scales:{y:{stacked:true,...scalesXY().y},x:{stacked:true,...scalesXY().x}}}
+  });
+}
+
+function buildMemberHistChart(){
+  const el = document.getElementById('member-hist-data');
+  if(!el) return;
+  let d;
+  try{ d = JSON.parse(el.textContent || el.innerHTML.replace(/&lt;/g,'<')); }catch(e){ return; }
+  if(!d) return;
+  const {hist,color,bg}=d;
+  mkChart('chart-member-hist',{type:'line',
+    data:{labels:hist.map(x=>x.date),datasets:[{label:'Completed',data:hist.map(x=>x.completed),
+      borderColor:color,backgroundColor:bg+'55',fill:true,tension:.4,pointRadius:3,borderWidth:2}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:scalesXY()}
+  });
+}
+
+// ─────────────────────────────────────────────
+// MEMBER NAV
+// ─────────────────────────────────────────────
+function buildMemberNav(){
+  const el=document.getElementById('member-nav');
+  if(!el) return;
+  el.innerHTML=state.settings.members.map((name,i)=>{
+    const mc=memberColor(i);
+    const s=getMemberSummary(name);
+    const active=state.currentView==='member'&&normName(state.selectedMember)===normName(name);
+    return `
+    <div class="nav-item ${active?'active':''}" onclick="showMember('${name}')">
+      <div class="member-dot" style="background:${mc.color}"></div>
+      <span>${name.split(' ')[0]}</span>
+      ${s.overdue>0?`<span class="ml-auto badge badge-danger" style="padding:1px 5px;font-size:10px">${s.overdue}</span>`:''}
+    </div>`;
+  }).join('');
+}
+
+// ─────────────────────────────────────────────
+// SETTINGS
+// ─────────────────────────────────────────────
+function openSettings(){
+  document.getElementById('settings-modal').classList.remove('hidden');
+  document.getElementById('mc-url').value=state.settings.mcUrl||'';
+  document.getElementById('mc-token').value=state.settings.mcToken||'';
+  document.getElementById('mc-interval').value=state.settings.mcInterval||15;
+  document.getElementById('team-members').value=state.settings.members.join(', ');
+  setTimeout(refreshImportStatus, 50);
+  const unMap = state.settings.mcUsernames || {};
+  document.getElementById('mc-usernames').value = Object.entries(unMap).map(([k,v])=>k+'='+v).join('\n');
+}
+function closeSettings(){ document.getElementById('settings-modal').classList.add('hidden'); }
+function saveSettings(){
+  state.settings.mcUrl    = document.getElementById('mc-url').value.trim().replace(/\/$/,'');
+  state.settings.mcToken  = document.getElementById('mc-token').value.trim();
+  state.settings.mcInterval= parseInt(document.getElementById('mc-interval').value)||15;
+  const raw = document.getElementById('team-members').value;
+  state.settings.members  = raw.split(',').map(s=>s.trim()).filter(Boolean);
+  // Parse MC username mappings
+  const unRaw = document.getElementById('mc-usernames').value;
+  state.settings.mcUsernames = {};
+  unRaw.split('\n').forEach(line => {
+    const [display, mcUser] = line.split('=').map(s=>s.trim());
+    if(display && mcUser) state.settings.mcUsernames[display] = mcUser;
+  });
+  persist();
+  closeSettings();
+  if(state.settings.mcUrl && state.settings.mcToken) syncMasterControl();
+  else render();
+}
+document.getElementById('settings-modal').addEventListener('click',e=>{
+  if(e.target===document.getElementById('settings-modal')) closeSettings();
+});
+
+// ─────────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────────
+loadState();
+render();
+startAutoSync();
+</script>
+</body>
+</html><!DOCTYPE html>
+<!-- QMS Dashboard v4 - SOAP bridge - built 2026-03-27 -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QMS Operations Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root {
+    --bg:#f5f4f1;--surface:#fff;--surface2:#f0eeea;
+    --border:rgba(0,0,0,.10);--border-strong:rgba(0,0,0,.18);
+    --text:#1a1a18;--text-muted:#6b6a64;--text-subtle:#9b9a94;
+    --accent:#1d6fa8;--accent-bg:#e6f1fb;
+    --success:#3b6d11;--success-bg:#eaf3de;
+    --warning:#854f0b;--warning-bg:#faeeda;
+    --danger:#a32d2d;--danger-bg:#fcebeb;
+    --purple:#534ab7;--purple-bg:#eeedfe;
+    --teal:#0f6e56;--teal-bg:#e1f5ee;
+    --radius:10px;--radius-sm:6px;
+    --shadow:0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);
+  }
+  @media(prefers-color-scheme:dark){:root{
+    --bg:#1a1a18;--surface:#252523;--surface2:#2e2e2b;
+    --border:rgba(255,255,255,.08);--border-strong:rgba(255,255,255,.15);
+    --text:#e8e6e0;--text-muted:#9b9a94;--text-subtle:#6b6a64;
+    --accent:#60a5d8;--accent-bg:#0c2a3d;
+    --success:#7ab84e;--success-bg:#1a2e0d;
+    --warning:#e8a044;--warning-bg:#2e1e06;
+    --danger:#e06060;--danger-bg:#2e1010;
+    --purple:#9b96e8;--purple-bg:#1e1c3d;
+    --teal:#3dc2a0;--teal-bg:#0b2a22;
+  }}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
+  .app{display:flex;height:100vh;overflow:hidden}
+  .sidebar{width:224px;min-width:224px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto}
+  .main{flex:1;overflow-y:auto;padding:24px}
+  .sidebar-logo{padding:18px 16px 12px;font-size:13px;font-weight:600;border-bottom:1px solid var(--border)}
+  .sidebar-logo span{color:var(--accent)}
+  .sidebar-section{padding:14px 12px 4px;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text-subtle)}
+  .nav-item{display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:var(--radius-sm);cursor:pointer;font-size:13px;color:var(--text-muted);transition:all .15s;margin:1px 6px}
+  .nav-item:hover{background:var(--surface2);color:var(--text)}
+  .nav-item.active{background:var(--accent-bg);color:var(--accent);font-weight:500}
+  .nav-icon{width:15px;height:15px;flex-shrink:0;opacity:.7}
+  .nav-item.active .nav-icon{opacity:1}
+  .member-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+  .sidebar-footer{margin-top:auto;padding:10px 6px;border-top:1px solid var(--border)}
+  .settings-btn{display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:var(--radius-sm);cursor:pointer;font-size:12px;color:var(--text-subtle);transition:all .15s}
+  .settings-btn:hover{background:var(--surface2);color:var(--text-muted)}
+  .page-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px;gap:16px;flex-wrap:wrap}
+  .page-title{font-size:20px;font-weight:600}
+  .page-subtitle{font-size:12px;color:var(--text-muted);margin-top:2px}
+  .header-actions{display:flex;gap:8px;align-items:center;flex-shrink:0;flex-wrap:wrap}
+  .btn{display:inline-flex;align-items:center;gap:5px;padding:6px 13px;border-radius:var(--radius-sm);font-size:13px;font-weight:500;cursor:pointer;border:1px solid var(--border-strong);background:var(--surface);color:var(--text-muted);transition:all .15s;white-space:nowrap;font-family:inherit}
+  .btn:hover{background:var(--surface2);color:var(--text)}
+  .btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn-primary:hover{opacity:.9;color:#fff}
+  .btn-sm{padding:4px 10px;font-size:12px}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}
+  .status-bar{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 14px;margin-bottom:18px;font-size:12px;flex-wrap:wrap}
+  .status-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+  .status-dot.green{background:var(--success)}
+  .status-dot.yellow{background:var(--warning)}
+  .status-dot.red{background:var(--danger)}
+  .status-item{display:flex;align-items:center;gap:5px;color:var(--text-muted)}
+  .status-sep{color:var(--border-strong)}
+  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:11px;margin-bottom:18px}
+  .kpi-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:13px 15px;box-shadow:var(--shadow)}
+  .kpi-label{font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--text-subtle);margin-bottom:5px}
+  .kpi-value{font-size:26px;font-weight:600;line-height:1.1}
+  .kpi-delta{font-size:11px;margin-top:3px;display:flex;align-items:center;gap:3px}
+  .kpi-delta.up{color:var(--success)}
+  .kpi-delta.down{color:var(--danger)}
+  .kpi-delta.neutral{color:var(--text-subtle)}
+  .two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+  .full-row{margin-bottom:14px}
+  .data-table{width:100%;border-collapse:collapse;font-size:13px}
+  .data-table th{text-align:left;padding:7px 10px;font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-subtle);border-bottom:1px solid var(--border)}
+  .data-table td{padding:9px 10px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle}
+  .data-table tr:last-child td{border-bottom:none}
+  .data-table tbody tr:hover{background:var(--surface2)}
+  .badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:20px;font-size:11px;font-weight:500;white-space:nowrap}
+  .badge-success{background:var(--success-bg);color:var(--success)}
+  .badge-warning{background:var(--warning-bg);color:var(--warning)}
+  .badge-danger{background:var(--danger-bg);color:var(--danger)}
+  .badge-accent{background:var(--accent-bg);color:var(--accent)}
+  .badge-purple{background:var(--purple-bg);color:var(--purple)}
+  .badge-neutral{background:var(--surface2);color:var(--text-muted)}
+  .card-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:13px;gap:8px}
+  .card-title{font-size:13px;font-weight:600}
+  .card-subtitle{font-size:11px;color:var(--text-subtle);margin-top:1px}
+  .chart-wrap{position:relative}
+  .member-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px}
+  .member-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:15px;box-shadow:var(--shadow);transition:border-color .15s;cursor:pointer}
+  .member-card:hover{border-color:var(--accent)}
+  .member-header{display:flex;align-items:center;gap:10px;margin-bottom:11px}
+  .avatar{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;flex-shrink:0}
+  .member-name{font-size:13px;font-weight:600}
+  .member-role{font-size:11px;color:var(--text-muted)}
+  .member-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .member-stat{text-align:center}
+  .member-stat-val{font-size:18px;font-weight:600}
+  .member-stat-lbl{font-size:10px;color:var(--text-subtle);text-transform:uppercase;letter-spacing:.04em}
+  .progress-bar{height:4px;background:var(--surface2);border-radius:3px;overflow:hidden;margin-top:10px}
+  .progress-fill{height:100%;border-radius:3px;transition:width .4s}
+  .detail-header{margin-bottom:18px}
+  .back-btn{display:inline-flex;align-items:center;gap:4px;font-size:13px;color:var(--text-muted);cursor:pointer;padding:4px 8px;border-radius:var(--radius-sm)}
+  .back-btn:hover{background:var(--surface2);color:var(--text)}
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;display:flex;align-items:center;justify-content:center}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;width:540px;max-width:95vw;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)}
+  .modal-title{font-size:16px;font-weight:600;margin-bottom:3px}
+  .modal-subtitle{font-size:12px;color:var(--text-muted);margin-bottom:18px}
+  .form-row{margin-bottom:13px}
+  .form-label{font-size:12px;font-weight:500;color:var(--text-muted);margin-bottom:4px;display:block}
+  .form-input{width:100%;padding:7px 10px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text);font-size:13px;font-family:inherit;outline:none;transition:border-color .15s}
+  .form-input:focus{border-color:var(--accent)}
+  .form-hint{font-size:11px;color:var(--text-subtle);margin-top:3px}
+  .drop-zone{border:2px dashed var(--border-strong);border-radius:var(--radius);padding:20px;text-align:center;cursor:pointer;transition:all .15s}
+  .drop-zone:hover,.drop-zone.drag-over{border-color:var(--accent);background:var(--accent-bg)}
+  .drop-zone-text{font-size:13px;color:var(--text-muted);margin-top:6px}
+  .drop-zone-sub{font-size:11px;color:var(--text-subtle);margin-top:3px}
+  .overdue-row td{background:color-mix(in srgb,var(--danger-bg) 35%,transparent)}
+  .sync-pill{font-size:11px;background:var(--surface2);padding:3px 9px;border-radius:20px;color:var(--text-subtle);display:flex;align-items:center;gap:4px}
+  .divider{height:1px;background:var(--border);margin:14px 0}
+  .tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;background:var(--surface2);color:var(--text-muted)}
+  .hidden{display:none!important}
+  .ml-auto{margin-left:auto}
+  .text-muted{color:var(--text-muted)}
+  .text-subtle{color:var(--text-subtle)}
+  .text-sm{font-size:12px}
+  .text-xs{font-size:11px}
+  .font-medium{font-weight:500}
+  .mt-1{margin-top:4px}
+  .flex{display:flex}
+  .items-center{align-items:center}
+  .gap-2{gap:8px}
+  /* sync spinner */
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .spin{animation:spin .8s linear infinite;display:inline-block}
+  /* alert banner */
+  .alert{padding:8px 14px;border-radius:var(--radius-sm);font-size:12px;margin-bottom:14px;border:1px solid}
+  .alert-warn{background:var(--warning-bg);color:var(--warning);border-color:color-mix(in srgb,var(--warning) 30%,transparent)}
+  .alert-info{background:var(--accent-bg);color:var(--accent);border-color:color-mix(in srgb,var(--accent) 30%,transparent)}
+  @media(max-width:900px){.two-col{grid-template-columns:1fr}}
+  @media(max-width:700px){.sidebar{display:none}.kpi-grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="sidebar">
+    <div class="sidebar-logo">QMS Ops <span>Dashboard</span></div>
+    <div class="sidebar-section">Views</div>
+    <div class="nav-item active" onclick="showView('team')" id="nav-team">
+      <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="5" r="2"/><circle cx="11" cy="5" r="2"/><path d="M1 13c0-2.2 1.8-4 4-4h2m0 0h2c2.2 0 4 1.8 4 4"/></svg>
+      Team Overview
+    </div>
+    <div class="nav-item" onclick="showView('trends')" id="nav-trends">
+      <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="1,12 5,7 9,9 15,3"/><polyline points="12,3 15,3 15,6"/></svg>
+      Trends
+    </div>
+    <div class="nav-item" onclick="showView('tasks')" id="nav-tasks">
+      <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="2"/><polyline points="5,8 7,10 11,6"/></svg>
+      All Tasks
+    </div>
+    <div class="sidebar-section">Team Members</div>
+    <div id="member-nav"></div>
+    <div class="sidebar-footer">
+      <div class="settings-btn" onclick="openSettings()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.1 3.1l1.1 1.1M11.8 11.8l1.1 1.1M3.1 12.9l1.1-1.1M11.8 4.2l1.1-1.1"/></svg>
+        Settings &amp; Import
+      </div>
+    </div>
+  </nav>
+
+  <main class="main" id="main-content"></main>
+</div>
+
+<!-- SETTINGS MODAL -->
+<div class="modal-overlay hidden" id="settings-modal">
+  <div class="modal">
+    <div class="modal-title">Settings &amp; Data Import</div>
+    <div class="modal-subtitle">Configure MasterControl API and import Workfront data</div>
+
+    <div class="form-row">
+      <label class="form-label">MasterControl Base URL</label>
+      <input class="form-input" id="mc-url" placeholder="https://doterra.mastercontrol.com/doterra" />
+      <div class="form-hint">No trailing slash. Your company share is already included.</div>
+    </div>
+    <div class="form-row">
+      <label class="form-label">API Token (Bearer)</label>
+      <input class="form-input" type="password" id="mc-token" placeholder="Paste your MC API key" />
+      <div class="form-hint">Stored in localStorage only — never leaves your browser except to call MC directly.</div>
+    </div>
+    <div class="form-row">
+      <label class="form-label">Auto-sync interval</label>
+      <select class="form-input" id="mc-interval">
+        <option value="5">Every 5 min</option>
+        <option value="15" selected>Every 15 min</option>
+        <option value="30">Every 30 min</option>
+        <option value="60">Every hour</option>
+      </select>
+    </div>
+
+    <div class="divider"></div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:4px">
+      <div>
+        <div class="card-title" style="margin-bottom:6px">Workfront Tasks (.xlsx)</div>
+        <div class="drop-zone" id="drop-zone-wf" onclick="document.getElementById('file-wf').click()">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-subtle)" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <div class="drop-zone-text">Drop Workfront export here</div>
+          <div class="drop-zone-sub">Task Name · Assigned To · Due Date · Status · Priority</div>
+        </div>
+        <input type="file" id="file-wf" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleWFImport(this.files[0])">
+        <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+          <div id="wf-status" class="text-sm text-muted hidden" style="flex:1"></div>
+          <button class="btn btn-sm hidden" id="wf-clear" onclick="clearImport('wf')" style="color:var(--danger);border-color:var(--danger);flex-shrink:0">✕ Clear</button>
+        </div>
+      </div>
+      <div>
+        <div class="card-title" style="margin-bottom:6px">MC Completed Tasks (.xlsx)</div>
+        <div class="drop-zone" id="drop-zone-mc" onclick="document.getElementById('file-mc').click()">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-subtle)" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <div class="drop-zone-text">Drop MC task history export here</div>
+          <div class="drop-zone-sub">Task Name · Completed By · Completion Date · Route</div>
+        </div>
+        <input type="file" id="file-mc" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleMCCompletedImport(this.files[0])">
+        <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+          <div id="mc-status" class="text-sm text-muted hidden" style="flex:1"></div>
+          <button class="btn btn-sm hidden" id="mc-clear" onclick="clearImport('mc')" style="color:var(--danger);border-color:var(--danger);flex-shrink:0">✕ Clear</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="card-title" style="margin-bottom:6px">Team Members</div>
+    <div class="form-hint" style="margin-bottom:8px">Display names shown in the dashboard — comma-separated.</div>
+    <textarea class="form-input" id="team-members" rows="2" placeholder="Casey R., Jordan L., Priya M., Sam T."></textarea>
+
+    <div style="margin-top:12px">
+      <div class="form-label">MC Usernames</div>
+      <div class="form-hint" style="margin-bottom:6px">Map each display name to their MasterControl login username. Format: <code style="font-size:11px;background:var(--surface2);padding:1px 4px;border-radius:3px">Display Name=mcusername</code> one per line.</div>
+      <textarea class="form-input" id="mc-usernames" rows="4" placeholder="Casey R.=casey.rodriguez&#10;Jordan L.=jordan.lee&#10;Priya M.=priya.mehta&#10;Sam T.=sam.thomas"></textarea>
+      <div class="form-hint">If left blank, the dashboard will use the display name as-is for MC API calls.</div>
+    </div>
+
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+      <button class="btn" onclick="closeSettings()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveSettings()">Save &amp; Sync</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+// CONSTANTS & STATE
+// ─────────────────────────────────────────────
+const MC_ENDPOINTS = {
+  // Forms / workflow tasks
+  workflows:        '/restapi/v1/forms/workflows',
+  workflowsEnabled: '/restapi/v1/forms/workflows/enabled',
+  workflowTasks:    '/restapi/v1/forms/workflows/tasks/', // + {documentNumber}
+  // Document info card
+  docDetails:       '/v1/document/',                     // + {infocardId}/details
+  docLatest:        '/v1/document/',                     // + {documentNumber}/latest-revision
+  docSearch:        '/restapi/v1/documents/search/infoCardVaultChange',
+};
+
+const MEMBER_COLORS = [
+  {bg:'#e6f1fb',color:'#1d6fa8'},{bg:'#e1f5ee',color:'#0f6e56'},
+  {bg:'#faeeda',color:'#854f0b'},{bg:'#eeedfe',color:'#534ab7'},
+  {bg:'#eaf3de',color:'#3b6d11'},{bg:'#fcebeb',color:'#a32d2d'},
+];
+
+let state = {
+  settings:{ mcUrl:'', mcToken:'', mcInterval:15, members:['Casey R.','Jordan L.','Priya M.','Sam T.'] },
+  mcData:null,   // { docTasks:[], wfTasks:[], workflows:[] }
+  wfData:null,   // { tasks:[], projects:[] }
+  history:[],    // weekly snapshots
+  lastSync:null,
+  syncError:null,
+  currentView:'team',
+  selectedMember:null,
+  syncing:false,
+  period:'current',  // 'current' | '30d' | '90d' | 'all'
+};
+
+// ─────────────────────────────────────────────
+// PERSIST
+// ─────────────────────────────────────────────
+function loadState(){
+  try{
+    const s = localStorage.getItem('qms_v3');
+    if(s) Object.assign(state, JSON.parse(s));
+  }catch(e){}
+  if(!state.mcData) injectMockData();
+}
+function persist(){ try{ localStorage.setItem('qms_v3', JSON.stringify(state)); }catch(e){} }
+
+// ─────────────────────────────────────────────
+// MOCK DATA  (replaced by real API on first sync)
+// ─────────────────────────────────────────────
+function injectMockData(){
+  const members = state.settings.members;
+  const dAgo  = d => { const x=new Date(); x.setDate(x.getDate()-d); return x.toISOString().split('T')[0]; };
+  const dFwd  = d => { const x=new Date(); x.setDate(x.getDate()+d); return x.toISOString().split('T')[0]; };
+
+  state.mcData = {
+    workflows: [
+      {id:'WF-001',name:'SOP-00704 System Change Control CSA v3',status:'active'},
+      {id:'WF-002',name:'CC2026-013 Change Control',status:'active'},
+      {id:'WF-003',name:'CS-AQEM-SCC-001 Workflow Config',status:'complete'},
+    ],
+    docTasks: [
+      {id:'DOC-001',title:'SOP-00704 System Change Control CSA — Approval',assignee:members[0],status:'pending',dueDate:dAgo(2),priority:'high',type:'Document Approval',workflow:'WF-001',source:'MasterControl'},
+      {id:'DOC-002',title:'PLAN-0003 Rev 3.0 Amendment — Review',assignee:members[0],status:'in_progress',dueDate:dFwd(5),priority:'high',type:'Document Review',workflow:'WF-002',source:'MasterControl'},
+      {id:'DOC-003',title:'CS-DOC-WF-001 Patch — Effective',assignee:members[1],status:'completed',dueDate:dAgo(8),priority:'medium',type:'Document Control',workflow:'WF-003',source:'MasterControl'},
+      {id:'DOC-004',title:'Config Spec Management SOP — Draft',assignee:members[0],status:'in_progress',dueDate:dFwd(14),priority:'high',type:'Authoring',workflow:'WF-002',source:'MasterControl'},
+      {id:'DOC-005',title:'CC2026-013 Change Control — Sign-off',assignee:members[2],status:'pending',dueDate:dFwd(2),priority:'high',type:'Change Control',workflow:'WF-002',source:'MasterControl'},
+      {id:'DOC-006',title:'SOP-00059 Reference Line — Update',assignee:members[1],status:'completed',dueDate:dAgo(3),priority:'low',type:'Document Control',workflow:'WF-001',source:'MasterControl'},
+      {id:'DOC-007',title:'QMS CSA & SaaS Validation Policy — Draft Review',assignee:members[3],status:'in_progress',dueDate:dFwd(10),priority:'high',type:'Document Review',workflow:'WF-002',source:'MasterControl'},
+      {id:'DOC-008',title:'CS-AQEM-SCC-001 Workflow Config — Verify',assignee:members[0],status:'completed',dueDate:dAgo(5),priority:'medium',type:'Configuration',workflow:'WF-003',source:'MasterControl'},
+      {id:'DOC-009',title:'Audit Readiness Findings Report — Approval',assignee:members[0],status:'completed',dueDate:dAgo(10),priority:'high',type:'Audit',workflow:'WF-001',source:'MasterControl'},
+      {id:'DOC-010',title:'Ireland Admin Access — Access Review',assignee:members[3],status:'pending',dueDate:dAgo(1),priority:'high',type:'Access Control',workflow:'WF-002',source:'MasterControl'},
+      {id:'DOC-011',title:'MasterControl Module Testing — Sign-off',assignee:members[1],status:'in_progress',dueDate:dFwd(3),priority:'medium',type:'Validation',workflow:'WF-001',source:'MasterControl'},
+    ],
+    wfTasks: [],
+  };
+
+  if(!state.history.length){
+    const now = new Date();
+    for(let w=12;w>=0;w--){
+      const d = new Date(now); d.setDate(d.getDate()-w*7);
+      const lbl = d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+      state.history.push({
+        date:lbl,
+        docCompleted: Math.round(82+Math.random()*12-(w*.4)),
+        docPending:   Math.round(10-w*.2+Math.random()*4),
+        overdueCount: Math.max(0,Math.round(4-w*.1+Math.random()*3)),
+        wfTaskCount:  Math.round(15+Math.random()*8),
+      });
+    }
+  }
+  state.lastSync = 'demo mode';
+}
+
+// ─────────────────────────────────────────────
+// MC API  —  real calls
+// ─────────────────────────────────────────────
+async function mcFetch(path, opts={}){
+  const base = (state.settings.mcUrl||'').replace(/\/$/,'');
+  const url  = base + path;
+  const res  = await fetch(url,{
+    ...opts,
+    headers:{ 'Authorization':'Bearer '+state.settings.mcToken, 'Content-Type':'application/json', ...(opts.headers||{}) },
+  });
+  if(!res.ok){
+    let body = '';
+    try{ body = await res.text(); }catch(_){}
+    _diag['HTTP_ERROR'] = { status: res.status, path, body: body.slice(0,500) };
+    throw new Error(`MC ${res.status}: ${path}`);
+  }
+  return res.json();
+}
+
+// Fetch all active workflow task lists, then fan out per workflow document
+async function fetchMCWorkflowTasks(){
+  // Step 1: get ENABLED (active/in-progress) form instances — not workflow templates
+  let enabledRaw;
+  try {
+    enabledRaw = await mcFetch(MC_ENDPOINTS.workflowsEnabled);
+    _diag['1_workflows_raw'] = Array.isArray(enabledRaw) ? enabledRaw.slice(0,3) : enabledRaw;
+  } catch(e) {
+    _diag['1_workflows_raw'] = { FETCH_ERROR: e.message };
+    // Fall back to trying the base workflows endpoint
+    try {
+      enabledRaw = await mcFetch(MC_ENDPOINTS.workflows);
+      _diag['1_workflows_raw_fallback'] = Array.isArray(enabledRaw) ? enabledRaw.slice(0,3) : enabledRaw;
+    } catch(e2) {
+      _diag['1_workflows_raw_fallback'] = { FETCH_ERROR: e2.message };
+      return { workflows: [], wfTasks: [] };
+    }
+  }
+
+  const instances = Array.isArray(enabledRaw)
+    ? enabledRaw
+    : (enabledRaw.items || enabledRaw.results || enabledRaw.data || enabledRaw.forms || []);
+
+  _diag['2_instances_parsed'] = { count: instances.length, firstItem: instances[0] || null };
+
+  if(instances.length === 0){
+    _diag['2_instances_parsed'].note = 'No active form instances returned. The enabled endpoint may require query params.';
+    return { workflows: instances, wfTasks: [] };
+  }
+
+  // Step 2: for each active form instance, get its pending tasks
+  // Active form instances should have a documentNumber or formInstanceId field
+  const BATCH = 20;
+  const allTasks = [];
+  const taskSamples = [];
+
+  for(let i=0; i<instances.length; i+=BATCH){
+    const batch = instances.slice(i, i+BATCH);
+    const results = await Promise.allSettled(
+      batch.map(inst => {
+        // Try every plausible document number field on the instance
+        const docNum = inst.documentNumber || inst.formNumber || inst.instanceNumber
+                    || inst.number || inst.formInstanceId || inst.id || '';
+        if(!docNum) return Promise.resolve({ inst, data: null, docNum: '(no docNum field found)' });
+        return mcFetch(MC_ENDPOINTS.workflowTasks + encodeURIComponent(docNum))
+          .then(data => ({inst, data, docNum}))
+          .catch(err => ({ inst, error: err.message, docNum }));
+      })
+    );
+
+    results.forEach(r => {
+      if(r.status === 'fulfilled' && r.value){
+        const {inst, data, error, docNum} = r.value;
+        if(error){
+          if(taskSamples.length < 3) taskSamples.push({ docNum, error });
+          return;
+        }
+        if(!data) return;
+        if(taskSamples.length < 3) taskSamples.push({ docNum, rawResponse: data });
+        const tasks = Array.isArray(data) ? data : (data.items || data.tasks || data.results || data.data || []);
+        tasks.forEach(t => allTasks.push(mapMCWorkflowTask(t, inst)));
+      }
+    });
+  }
+
+  _diag['3_task_samples'] = taskSamples;
+  _diag['4_total_tasks_mapped'] = allTasks.length;
+  return { workflows: instances, wfTasks: allTasks };
+}
+
+// Fetch document tasks via search endpoint
+async function fetchMCDocTasks(){
+  try{
+    const body = JSON.stringify({ status:['PENDING','IN_PROGRESS','ROUTED'], limit:200 });
+    const data = await mcFetch(MC_ENDPOINTS.docSearch, { method:'POST', body });
+    const items = Array.isArray(data) ? data : (data.items || data.results || []);
+    return items.map(mapMCDocTask);
+  }catch(e){
+    // Search endpoint may require different payload — return empty and rely on workflow tasks
+    return [];
+  }
+}
+
+function mapMCWorkflowTask(t, wf){
+  return {
+    id:        t.taskId || t.id || t.stepId || '',
+    title:     t.taskName || t.name || t.stepName || (wf.name||wf.formTitle||'Workflow Task'),
+    assignee:  t.assignedTo || t.owner || t.responsible || t.username || '',
+    status:    normalizeStatus(t.status || t.stepStatus || ''),
+    dueDate:   normalizeDate(t.dueDate || t.targetDate || wf.dueDate),
+    priority:  normalizePriority(t.priority || wf.priority || ''),
+    type:      t.taskType || t.stepType || wf.formType || 'Workflow Task',
+    workflow:  wf.documentNumber || wf.id || '',
+    wfName:    wf.name || wf.formTitle || '',
+    source:    'MasterControl',
+  };
+}
+
+function mapMCDocTask(d){
+  return {
+    id:       d.documentNumber || d.infocardId || d.id || '',
+    title:    d.title || d.documentTitle || d.name || 'Unnamed Document',
+    assignee: d.owner || d.responsible || d.assignedTo || '',
+    status:   normalizeStatus(d.status || d.lifecycleStatus || ''),
+    dueDate:  normalizeDate(d.dueDate || d.targetDate || d.expirationDate),
+    priority: normalizePriority(d.priority || ''),
+    type:     d.documentType || d.type || 'Document Task',
+    source:   'MasterControl',
+  };
+}
+
+// ─────────────────────────────────────────────
+// DIAGNOSTIC
+// ─────────────────────────────────────────────
+let _diag = {};
+
+function showDiag(){
+  const w = window.open('','_blank','width=900,height=600');
+  w.document.write(`<html><head><title>MC API Diagnostic</title>
+  <style>body{font-family:monospace;font-size:12px;padding:16px;background:#1a1a18;color:#e8e6e0}
+  h3{color:#60a5d8;margin:14px 0 4px}pre{background:#252523;padding:12px;border-radius:6px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:#c2c0b6}</style></head><body>`);
+  w.document.write('<h2 style="color:#e8e6e0">MC API Diagnostic</h2>');
+  Object.entries(_diag).forEach(([key, val]) => {
+    w.document.write(`<h3>${key}</h3><pre>${JSON.stringify(val, null, 2)}</pre>`);
+  });
+  w.document.write('</body></html>');
+}
+
+// ─────────────────────────────────────────────
+// MC SOAP/JSON BRIDGE API
+// All calls go to /ws/JSONBridge.cfm via POST
+// ─────────────────────────────────────────────
+
+async function mcBridge(serviceName, methodName, args){
+  const base = (state.settings.mcUrl || '').replace(/\/$/,'');
+  const url  = base + '/ws/JSONBridge.cfm';
+  const body = JSON.stringify({ serviceName, methodName, arguments: args });
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  });
+
+  if(!res.ok){
+    let txt = ''; try{ txt = await res.text(); }catch(_){}
+    _diag['HTTP_ERROR'] = { status: res.status, url, body: txt.slice(0,500) };
+    throw new Error(`Bridge HTTP ${res.status}`);
+  }
+
+  const data = await res.json();
+
+  // MC bridge wraps errors in result.message with success:false
+  if(data.result && data.result.success === false){
+    throw new Error(data.result.message || 'MC bridge error');
+  }
+
+  return data;
+}
+
+// Step 1: authenticate with API key → get connectionID
+async function mcConnect(){
+  const token = state.settings.mcToken;
+  if(!token) throw new Error('No API token configured');
+
+  const data = await mcBridge('ConnectionService', 'connectWithApiKey', {
+    apiKey: token,
+    logoutCurrentWebConnection: false,
+  });
+
+  _diag['1_connect_raw'] = data;
+
+  // MC returns the connectionID as a plain string in data.result
+  const connectionID = (typeof data.result === 'string' ? data.result : null)
+                    || data.result?.connectionID
+                    || data.result?.connectionId
+                    || data.result?.id
+                    || data.connectionID
+                    || data.connectionId;
+
+  if(!connectionID) throw new Error('No connectionID in response: ' + JSON.stringify(data).slice(0,200));
+  return connectionID;
+}
+
+// Step 2: get tasks for one user (all types)
+async function mcGetUserTasks(connectionID, username){
+  const data = await mcBridge('TaskService', 'getUsersTasks', {
+    connectionID,
+    username,
+    type: '',   // blank = all task types
+  });
+  return data?.result?.tasks || [];
+}
+
+// Map a raw MC task to our internal format
+function mapSoapTask(t, assignee){
+  // All tasks from getUsersTasks are active/pending — completed tasks come from report import
+  const status = 'in_progress';
+
+  // MC task steps don't have a due date — notificationdate = when it entered the queue
+  const queuedDate = normalizeDate(t.notificationdate || t.launchdate);
+  const launchDate = normalizeDate(t.launchdate);
+
+  // Build MC link using viewPacket — accessible to doc admins regardless of task assignment
+  // Falls back to the original showTask link from the API if packetid unavailable
+  // MC uses JS-driven navigation with no direct packet URLs — no link available
+  const mcLink = '';
+
+  return {
+    id:         t.packetid || t.stepid || t.id || '',
+    title:      t.name || t.documentTitle || t.packetName || 'Unnamed Task',
+    stepName:   t.stepname || '',
+    assignee:   assignee,
+    status,
+    queuedDate,   // when it entered the queue
+    launchDate,   // when the workflow started
+    dueDate:    null,   // MC task steps have no due date
+    priority:   normalizePriority(t.priority || ''),
+    type:       t.type || t.taskType || 'MC Task',
+    workflow:   t.routename || t.workflowName || '',
+    wfName:     t.routename || '',
+    mcLink,
+    source:     'MasterControl',
+  };
+}
+
+// Main sync: connect once, then fan out one call per team member
+async function syncMasterControl(){
+  if(!state.settings.mcUrl || !state.settings.mcToken){
+    state.syncError = 'API URL and token required. Open Settings to configure.';
+    render(); return;
+  }
+
+  state.syncing = true;
+  state.syncError = null;
+  _diag = {};
+  render();
+
+  // 15-second timeout guard
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Sync timed out after 15s — check Worker URL and token')), 15000)
+  );
+
+  try{
+    await Promise.race([doSync(), timeout]);
+  }catch(e){
+    _diag['SYNC_ERROR'] = { message: e.message };
+    state.syncError = e.message + ' — <button class="btn btn-sm" onclick="showDiag()">Debug ↗</button>';
+  }
+
+  state.syncing = false;
+  // Always store something so debug window is never blank
+  if(Object.keys(_diag).length === 0){
+    _diag['_note'] = 'doSync() was never called — syncMasterControl caught an error before reaching doSync, or the old cached JS is still running.';
+  }
+  render();
+}
+
+async function doSync(){
+  // 1. Authenticate
+  const connectionID = await mcConnect();
+  _diag['2_connectionID'] = connectionID;
+
+  // 2. Fan out — one getUsersTasks call per team member, all in parallel
+  const members = state.settings.members;
+  const results = await Promise.allSettled(
+    members.map(name => {
+      // MC username is typically firstname.lastname or similar — use the stored MC username
+      // mapping if available, otherwise fall back to the display name
+      const mcUser = state.settings.mcUsernames?.[name] || name;
+      return mcGetUserTasks(connectionID, mcUser).then(tasks => ({ name, tasks }));
+    })
+  );
+
+  _diag['3_per_member_raw'] = {};
+  const allTasks = [];
+
+  results.forEach(r => {
+    if(r.status === 'fulfilled'){
+      const { name, tasks } = r.value;
+      _diag['3_per_member_raw'][name] = { count: tasks.length, sample: tasks[0] || null };
+      tasks.forEach(t => allTasks.push(mapSoapTask(t, name)));
+    } else {
+      _diag['3_per_member_raw']['ERROR'] = r.reason?.message;
+    }
+  });
+
+  _diag['4_total_tasks'] = allTasks.length;
+
+  state.mcData = {
+    workflows: [],
+    docTasks:  allTasks,
+    wfTasks:   [],
+  };
+
+  state.lastSync = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  snapshotHistory();
+  persist();
+}
+
+// Auto-sync loop
+function startAutoSync(){
+  setInterval(()=>{
+    if(state.settings.mcUrl && state.settings.mcToken && !state.syncing) syncMasterControl();
+  }, (state.settings.mcInterval||15)*60*1000);
+}
+
+// ─────────────────────────────────────────────
+// WORKFRONT IMPORT
+// ─────────────────────────────────────────────
+function handleWFImport(file){
+  if(!file) return;
+  const el = document.getElementById('wf-status');
+  el.classList.remove('hidden'); el.style.color=''; el.textContent='Reading…';
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{
+      const wb = XLSX.read(e.target.result,{type:'array'});
+      let tasks=[], projects=[];
+
+      const taskSheet = wb.SheetNames.find(n=>/task/i.test(n)) || wb.SheetNames[0];
+      const projSheet = wb.SheetNames.find(n=>/proj/i.test(n));
+
+      if(taskSheet){
+        const ws = wb.Sheets[taskSheet];
+        const rows = XLSX.utils.sheet_to_json(ws);
+
+        // Build a hyperlink map: row index → link URL
+        // SheetJS stores hyperlinks on the cell object as cell.l.Target
+        // Sheet cells are keyed like 'A1', 'B2' etc. Row 1 = header, data starts row 2
+        const hyperlinkMap = {};
+        const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+        for(let R = range.s.r + 1; R <= range.e.r; R++){
+          for(let C = range.s.c; C <= range.e.c; C++){
+            const addr = XLSX.utils.encode_cell({r:R, c:C});
+            const cell = ws[addr];
+            if(cell && cell.l && cell.l.Target){
+              if(!hyperlinkMap[R]) hyperlinkMap[R] = {};
+              hyperlinkMap[R][C] = cell.l.Target;
+            }
+          }
+        }
+
+        // Find which column index holds the task/issue name
+        // Header row is range.s.r (row 0 in sheet = row index range.s.r)
+        let nameColIdx = -1;
+        for(let C = range.s.c; C <= range.e.c; C++){
+          const addr = XLSX.utils.encode_cell({r: range.s.r, c:C});
+          const cell = ws[addr];
+          const header = cell ? String(cell.v||'') : '';
+          if(/^(task name|name)$/i.test(header.trim())){
+            nameColIdx = C; break;
+          }
+        }
+
+        tasks = rows.map((r, i) => {
+          const assignee = r['Assignments']||r['Assigned To']||r['Assignee']||r['Owner']||'';
+          const project  = r['Project: Name']||r['Project']||r['Project Name']||'';
+          const priority = r['Project: Priority']||r['Priority']||r['priority']||'medium';
+          const title    = r['Task Name']||r['Name']||r['title']||'Unnamed';
+          const dueDate  = normalizeDate(r['Due Date']||r['Due']||r['dueDate']);
+          const entryDate     = normalizeDate(r['Entry']||r['Entry Date']||r['Submit Date']||r['Submitted']);
+          const completedDate = normalizeDate(r['Act Comp']||r['Actual Completion']||r['Completion Date']||r['Completed Date']||r['completionDate']);
+          const status = completedDate ? 'completed' : normalizeStatus(r['Status']||r['status']||'pending');
+          const isIssue = r['Ref #'] !== undefined;
+
+          // Extract hyperlink from the name cell for this data row
+          // Data rows start at sheet row index (range.s.r + 1 + i)
+          const sheetRowIdx = range.s.r + 1 + i;
+          const rowLinks = hyperlinkMap[sheetRowIdx] || {};
+          // Prefer the name column link, fall back to any link on this row
+          const wfLink = (nameColIdx >= 0 && rowLinks[nameColIdx])
+                      || Object.values(rowLinks)[0]
+                      || '';
+
+          // Source column: Queue Topic for Issues, Project Name for Tasks
+          const wfSource = isIssue
+            ? (r['Queue Topic: Category Name']||r['Queue Topic']||r['Category']||'')
+            : (r['Project: Name']||r['Project Name']||r['Project']||project||'');
+
+          // Planned Start Date (Tasks only)
+          const plannedStart = normalizeDate(
+            r['Planned Start Date']||r['Planned Start']||r['Start Date']||r['Actual Start Date']||null
+          );
+
+          // Project link (Tasks export has hyperlink on Project: Name column)
+          // Already captured in wfLink for name cell; project link may be on a different col
+          const projectLink = (() => {
+            // Find project col index — col B in tasks export has project hyperlink
+            for(let C = range.s.c; C <= range.e.c; C++){
+              const hdr = ws[XLSX.utils.encode_cell({r:range.s.r, c:C})];
+              if(hdr && /project.*name/i.test(String(hdr.v||''))){
+                return (hyperlinkMap[sheetRowIdx]||{})[C] || '';
+              }
+            }
+            return '';
+          })();
+
+          return {
+            id:             r['Ref #']||r['Task ID']||r['ID']||'WF-'+(i+1),
+            title,
+            assignee,
+            status,
+            dueDate,
+            plannedStart,
+            queuedDate:     entryDate,
+            completedDate,
+            priority:       normalizePriority(priority),
+            project,
+            wfName:         project,
+            wfSource,
+            projectLink,
+            type:           r['Task Type']||r['Type']||(isIssue?'WF Issue':'WF Task'),
+            stepName:       r['Task Type']||r['Type']||(isIssue?'Issue':'Task'),
+            wfLink,
+            source:         isIssue ? 'WF Issue' : 'WF Task',
+          };
+        });
+      }
+      if(projSheet){
+        projects = XLSX.utils.sheet_to_json(wb.Sheets[projSheet]).map((r,i)=>({
+          id:     r['Project ID']||r['ID']||'P-'+(i+1),
+          name:   r['Project: Name']||r['Project Name']||r['Name']||'Unnamed',
+          status: normalizeStatus(r['Status']||'in_progress'),
+          owner:  r['Owner']||r['Project Owner']||'',
+          dueDate:normalizeDate(r['Due Date']||r['End Date']),
+        }));
+      }
+
+      // Merge into existing WF data rather than replacing it
+      const existingTasks    = state.wfData?.tasks    || [];
+      const existingProjects = state.wfData?.projects || [];
+
+      // Deduplicate by id — new data wins on conflict
+      const mergedTaskMap = {};
+      [...existingTasks, ...tasks].forEach(t => { mergedTaskMap[t.id||t.title] = t; });
+      const mergedProjMap = {};
+      [...existingProjects, ...projects].forEach(p => { mergedProjMap[p.id||p.name] = p; });
+
+      state.wfData = {
+        tasks:     Object.values(mergedTaskMap),
+        projects:  Object.values(mergedProjMap),
+        importedAt: new Date().toISOString(),
+      };
+      snapshotHistory(); persist();
+      el.style.color='var(--success)';
+      el.textContent=`✓ ${tasks.length} new + ${existingTasks.length} existing = ${state.wfData.tasks.length} total tasks`;
+      document.getElementById('wf-clear')?.classList.remove('hidden');
+    }catch(err){
+      el.style.color='var(--danger)';
+      el.textContent='✗ Could not parse: '+err.message;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// Clear imported data
+function clearImport(type){
+  if(type === 'wf'){
+    state.wfData = null;
+    const el = document.getElementById('wf-status');
+    if(el){ el.textContent=''; el.classList.add('hidden'); }
+    document.getElementById('wf-clear')?.classList.add('hidden');
+    document.getElementById('file-wf').value = '';
+  } else if(type === 'mc'){
+    state.mcCompletedData = null;
+    const el = document.getElementById('mc-status');
+    if(el){ el.textContent=''; el.classList.add('hidden'); }
+    document.getElementById('mc-clear')?.classList.add('hidden');
+    document.getElementById('file-mc').value = '';
+  }
+  persist();
+  render();
+}
+
+// Show clear buttons and status when data is already loaded (opening settings)
+function refreshImportStatus(){
+  if(state.wfData){
+    const el = document.getElementById('wf-status');
+    if(el){ el.classList.remove('hidden'); el.style.color='var(--success)';
+      el.textContent=`✓ ${state.wfData.tasks?.length||0} tasks loaded (imported ${new Date(state.wfData.importedAt).toLocaleDateString()})`; }
+    document.getElementById('wf-clear')?.classList.remove('hidden');
+  }
+  if(state.mcCompletedData){
+    const el = document.getElementById('mc-status');
+    if(el){ el.classList.remove('hidden'); el.style.color='var(--success)';
+      el.textContent=`✓ ${state.mcCompletedData.tasks?.length||0} tasks loaded (imported ${new Date(state.mcCompletedData.importedAt).toLocaleDateString()})`; }
+    document.getElementById('mc-clear')?.classList.remove('hidden');
+  }
+}
+
+// MC Completed Tasks import handler
+function handleMCCompletedImport(file){
+  if(!file) return;
+  const el = document.getElementById('mc-status');
+  el.classList.remove('hidden'); el.style.color=''; el.textContent='Reading…';
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{
+      const wb = XLSX.read(e.target.result,{type:'array'});
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet);
+
+      const completed = rows.map((r,i)=>({
+        id:           r['Task ID']||r['ID']||r['Packet ID']||'MCH-'+(i+1),
+        title:        r['Task Name']||r['Document Title']||r['Name']||r['title']||'Unnamed',
+        stepName:     r['Step']||r['Step Name']||r['Task Type']||r['Type']||'',
+        assignee:     r['Assignments']||r['Completed By']||r['Assigned To']||r['User']||r['Username']||'',
+        status:       'completed',
+        dueDate:      null,
+        queuedDate:   null,
+        completedDate:normalizeDate(r['Act Comp']||r['Actual Completion']||r['Completion Date']||r['Completed Date']||r['Date Completed']||r['Date']),
+        workflow:     r['Route']||r['Workflow']||r['Route Name']||r['Project: Name']||r['Project']||'',
+        wfName:       r['Route']||r['Workflow']||r['Route Name']||r['Project: Name']||r['Project']||'',
+        type:         r['Type']||r['Task Type']||'Completed Task',
+        priority:     normalizePriority(r['Project: Priority']||r['Priority']||''),
+        mcLink:       '',
+        source:       'MasterControl',
+      }));
+
+      // Store separately from live tasks
+      if(!state.mcCompletedData) state.mcCompletedData = {};
+      // Merge into existing MC completed data
+      const existingMC = state.mcCompletedData?.tasks || [];
+      const mergedMCMap = {};
+      [...existingMC, ...completed].forEach(t => { mergedMCMap[t.id||t.title] = t; });
+
+      state.mcCompletedData = {
+        tasks: Object.values(mergedMCMap),
+        importedAt: new Date().toISOString(),
+      };
+      snapshotHistory();
+      persist();
+
+      el.style.color='var(--success)';
+      el.textContent=`✓ ${completed.length} new + ${existingMC.length} existing = ${state.mcCompletedData.tasks.length} total`;
+      document.getElementById('mc-clear')?.classList.remove('hidden');
+      render();
+    }catch(err){
+      el.style.color='var(--danger)';
+      el.textContent='✗ Could not parse: '+err.message;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// Drag-drop
+['dragover','dragleave','drop'].forEach(ev=>{
+  document.addEventListener('DOMContentLoaded',()=>{
+    const dz=document.getElementById('drop-zone-wf');
+    if(!dz) return;
+    dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag-over')});
+    dz.addEventListener('dragleave',()=>dz.classList.remove('drag-over'));
+    dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag-over');const f=e.dataTransfer.files[0];if(f)handleWFImport(f)});
+  });
+});
+
+// ─────────────────────────────────────────────
+// COMPUTED HELPERS
+// ─────────────────────────────────────────────
+function allTasks(){
+  const mc        = (state.mcData?.docTasks||[]);
+  const wf        = (state.wfData?.tasks||[]);
+  const mcDone    = (state.mcCompletedData?.tasks||[]);
+  return [...mc,...wf,...mcDone];
+}
+
+function pendingTasks(){
+  return allTasks().filter(t=>t.status!=='completed');
+}
+
+function completedTasks(){
+  return allTasks().filter(t=>t.status==='completed');
+}
+
+// Returns tasks filtered by the current period toggle
+// 'current' = active/pending only (no date filter on completed)
+// '30d','90d' = completed within N days; pending always included
+// 'all' = everything
+function tasksForPeriod(){
+  const tasks = allTasks();
+  const mcDone = state.mcCompletedData?.tasks || [];
+  const p = state.period || 'current';
+  if(p === 'all') return [...tasks, ...mcDone];
+  if(p === 'current') return tasks.filter(t => t.status !== 'completed');
+  const days = p === '30d' ? 30 : 90;
+  const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - days);
+  return [...tasks, ...mcDone].filter(t => {
+    if(t.status !== 'completed') return true; // always include active
+    const d = new Date(t.completedDate || t.queuedDate || 0);
+    return d >= cutoff;
+  });
+}
+
+function periodLabel(){
+  return { current:'Current queue', '30d':'Last 30 days', '90d':'Last 90 days', all:'All time' }[state.period||'current'];
+}
+
+function setPeriod(p){ state.period = p; render(); }
+
+function getKPIs(){
+  const tasks = tasksForPeriod();
+  const now = new Date(); now.setHours(0,0,0,0);
+  const od = t => t.status!=='completed' && t.dueDate && new Date(t.dueDate)<now;
+  return {
+    totalPending:   tasks.filter(t=>t.status==='pending'||t.status==='in_progress').length,
+    totalCompleted: tasks.filter(t=>t.status==='completed').length,
+    overdueCount:   tasks.filter(od).length,
+    activeWorkflows:(state.mcData?.workflows||[]).filter(w=>w.status==='active'||w.status==='ACTIVE').length,
+    wfProjects:     (state.wfData?.projects||[]).filter(p=>p.status==='in_progress').length,
+    pendingApproval:tasks.filter(t=>t.status==='pending'&&/approv/i.test(t.type||'')).length,
+  };
+}
+
+function getMemberSummary(name){
+  const tasks = tasksForPeriod().filter(t=>t.assignee===name||normName(t.assignee)===normName(name));
+  const now = new Date(); now.setHours(0,0,0,0);
+  const od = t => t.status!=='completed' && t.dueDate && new Date(t.dueDate)<now;
+  const activeTasks    = tasks.filter(t=>t.status==='pending'||t.status==='in_progress');
+  const completedTasks = tasks.filter(t=>t.status==='completed');
+  return {
+    pending:        activeTasks.length,
+    completed:      completedTasks.length,
+    overdue:        tasks.filter(od).length,
+    tasks:          activeTasks,    // Active Tasks table only shows active
+    allTasks:       tasks,          // Full list for other uses
+  };
+}
+
+function normName(n){ return (n||'').toLowerCase().replace(/\s+/g,' ').trim(); }
+
+function isOverdue(t){
+  if(t.status==='completed') return false;
+  const now=new Date(); now.setHours(0,0,0,0);
+  return t.dueDate && new Date(t.dueDate)<now;
+}
+
+function normalizeStatus(s){
+  s=(s||'').toLowerCase();
+  if(/complet|done|closed|approved|effective/.test(s)) return 'completed';
+  if(/progress|active|open|working|routed|review/.test(s)) return 'in_progress';
+  return 'pending';
+}
+function normalizePriority(p){
+  p=(p||'').toLowerCase();
+  if(/high|urgent|critical/.test(p)) return 'high';
+  if(/low|minor/.test(p)) return 'low';
+  return 'medium';
+}
+function normalizeDate(d){
+  if(!d) return null;
+  if(typeof d==='number'){ const dt=new Date(Math.round((d-25569)*86400*1000)); return dt.toISOString().split('T')[0]; }
+  const p=new Date(d); return isNaN(p)?null:p.toISOString().split('T')[0];
+}
+function formatDate(d){
+  if(!d) return '—';
+  return new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric'});
+}
+function memberColor(i){ return MEMBER_COLORS[i%MEMBER_COLORS.length]; }
+function initials(name){ return name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2); }
+
+function priorityBadge(p){
+  if(p==='high')   return '<span class="badge badge-danger">High</span>';
+  if(p==='medium') return '<span class="badge badge-warning">Med</span>';
+  return '<span class="badge badge-neutral">Low</span>';
+}
+function statusBadge(s){
+  if(s==='completed')  return '<span class="badge badge-success">Completed</span>';
+  if(s==='in_progress') return '<span class="badge badge-accent">In Progress</span>';
+  return '<span class="badge badge-neutral">Pending</span>';
+}
+
+// ─────────────────────────────────────────────
+// HISTORY SNAPSHOTS
+// ─────────────────────────────────────────────
+function snapshotHistory(){
+  const kpi = getKPIs();
+  const today = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  const allT = allTasks();
+  // Include WF completed tasks from imports in the completed count
+  const mcCompleted   = (state.mcCompletedData?.tasks||[]).length;
+  const allCompleted  = allT.filter(t=>t.status==='completed').length + mcCompleted;
+  const snap = {
+    date:today,
+    docCompleted: allCompleted,
+    docPending:   allT.filter(t=>t.status!=='completed').length,
+    overdueCount: kpi.overdueCount,
+    wfTaskCount:  (state.wfData?.tasks||[]).length + (state.wfData?.projects||[]).length,
+  };
+  if(state.history.length && state.history[state.history.length-1].date===today){
+    state.history[state.history.length-1]=snap;
+  } else {
+    state.history.push(snap);
+    if(state.history.length>53) state.history.shift();
+  }
+}
+
+// ─────────────────────────────────────────────
+// VIEWS
+// ─────────────────────────────────────────────
+function showView(view){ state.currentView=view; state.selectedMember=null; render(); }
+function showMember(name){ state.currentView='member'; state.selectedMember=name; render(); }
+
+function render(){
+  buildMemberNav();
+  document.querySelectorAll('[id^="nav-"]').forEach(el=>el.classList.remove('active'));
+  const nav=document.getElementById('nav-'+state.currentView);
+  if(nav) nav.classList.add('active');
+
+  const el=document.getElementById('main-content');
+  const v=state.currentView;
+  el.innerHTML = v==='team'   ? renderTeam()
+               : v==='trends' ? renderTrends()
+               : v==='tasks'  ? renderAllTasks()
+               : v==='member' ? renderMember(state.selectedMember)
+               : '';
+  setTimeout(attachCharts,60);
+}
+
+// ── TEAM OVERVIEW ──
+function renderTeam(){
+  const kpi=getKPIs();
+  const h=state.history;
+  const prev = h.length>=2 ? h[h.length-2] : null;
+  const cur  = h.length   ? h[h.length-1]  : null;
+  const delta = cur && prev ? cur.docCompleted - prev.docCompleted : 0;
+
+  return `
+  <div class="page-header">
+    <div>
+      <div class="page-title">Team Overview</div>
+      <div class="page-subtitle">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</div>
+    </div>
+    <div class="header-actions">
+      <div style="display:flex;gap:2px;background:var(--surface2);padding:3px;border-radius:var(--radius-sm)">
+        ${['current','30d','90d','all'].map(p=>`
+          <button onclick="setPeriod('${p}')" style="padding:4px 10px;font-size:12px;border-radius:4px;border:none;cursor:pointer;font-family:inherit;transition:all .15s;
+            background:${state.period===p?'var(--surface)':'transparent'};
+            color:${state.period===p?'var(--text)':'var(--text-muted)'};
+            font-weight:${state.period===p?'500':'400'};
+            box-shadow:${state.period===p?'var(--shadow)':'none'}"
+          >${{'current':'Current','30d':'30 days','90d':'90 days','all':'All time'}[p]}</button>
+        `).join('')}
+      </div>
+      <div class="sync-pill">
+        ${state.syncing
+          ? '<span class="spin">↻</span> Syncing…'
+          : `<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4c1.7-2 4.3-3 7-3 5 .5 8 5 7 10"/><polyline points="11,7 15,4 15,8"/><path d="M15 12c-1.7 2-4.3 3.3-7 3-5-.5-8-5-7-10"/><polyline points="5,9 1,12 1,8"/></svg>
+          MC ${state.lastSync||'not synced'}`}
+      </div>
+      <button class="btn btn-sm" onclick="syncMasterControl()" ${state.syncing?'disabled':''}>↻ Sync Now</button>
+      <button class="btn btn-sm btn-primary" onclick="openSettings()">Import Workfront</button>
+    </div>
+  </div>
+
+  ${state.syncError ? `<div class="alert alert-warn">${state.syncError} <button class="btn btn-sm" style="margin-left:8px" onclick="showDiag()">Debug last sync ↗</button></div>` : ''}
+  ${state.lastSync==='demo mode' ? `<div class="alert alert-info">Showing demo data. Add your MC API token in Settings to load live data.</div>` : ''}
+  <div class="alert alert-info" style="display:flex;align-items:center;gap:10px">Last sync: ${state.lastSync||'never'}. Tasks found: ${allTasks().length}. <button class="btn btn-sm" onclick="showDiag()">Debug API responses ↗</button></div>
+
+  <div class="status-bar">
+    <div class="status-item">
+      <div class="status-dot ${kpi.overdueCount>0?'red':'green'}"></div>
+      ${kpi.overdueCount>0 ? kpi.overdueCount+' overdue' : 'No overdue items'}
+    </div>
+    <span class="status-sep">·</span>
+    <div class="status-item">
+      <div class="status-dot ${state.settings.mcToken?'green':'yellow'}"></div>
+      MasterControl ${state.settings.mcToken ? (state.lastSync==='demo mode'?'connected (demo)':'live') : 'not configured'}
+    </div>
+    <span class="status-sep">·</span>
+    <div class="status-item">
+      <div class="status-dot ${state.wfData?'green':'yellow'}"></div>
+      Workfront ${state.wfData ? 'imported ✓' : 'not imported'}
+    </div>
+    <span class="status-sep">·</span>
+    <div class="status-item">
+      <div class="status-dot ${kpi.activeWorkflows>0?'green':'yellow'}"></div>
+      ${kpi.activeWorkflows} active workflows
+    </div>
+  </div>
+
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-label">Total Pending</div>
+      <div class="kpi-value" style="color:var(--accent)">${kpi.totalPending}</div>
+      <div class="kpi-delta neutral">all sources</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Completed</div>
+      <div class="kpi-value" style="color:var(--success)">${kpi.totalCompleted}</div>
+      <div class="kpi-delta ${delta>=0?'up':'down'}">${delta>=0?'▲':'▼'} ${Math.abs(delta)} vs last week</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Overdue</div>
+      <div class="kpi-value" style="color:${kpi.overdueCount>0?'var(--danger)':'var(--success)'}">${kpi.overdueCount}</div>
+      <div class="kpi-delta ${kpi.overdueCount>0?'down':'up'}">${kpi.overdueCount>0?'needs attention':'all on track'}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Active Workflows</div>
+      <div class="kpi-value" style="color:var(--purple)">${kpi.activeWorkflows}</div>
+      <div class="kpi-delta neutral">MasterControl</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">WF Projects</div>
+      <div class="kpi-value" style="color:var(--teal)">${kpi.wfProjects}</div>
+      <div class="kpi-delta neutral">Workfront active</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Pending Approval</div>
+      <div class="kpi-value" style="color:var(--warning)">${kpi.pendingApproval}</div>
+      <div class="kpi-delta neutral">awaiting sign-off</div>
+    </div>
+  </div>
+
   <div class="two-col">
     <div class="card">
       <div class="card-header"><div><div class="card-title">Task Status</div><div class="card-subtitle">${periodLabel()} · MC + Workfront</div></div></div>
