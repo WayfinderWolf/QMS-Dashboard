@@ -573,8 +573,10 @@ function mapSoapTask(t, assignee){
   // Falls back to the original showTask link from the API if packetid unavailable
   const packetId = t.packetid || t.packetId || '';
   const rawLink  = t.link || '';
+  // Use the original showTask link from the API — it works when opened directly in browser
+  // even for non-assignees who have doc admin rights (MC checks rights on page load)
   const mcLink = packetId
-    ? `https://doterra.mastercontrol.com/doterra/main/index.cfm?event=viewPacket&ID=${packetId}`
+    ? `https://doterra.mastercontrol.com/doterra/main/index.cfm?event=showTask&ID=${packetId}`
     : rawLink.startsWith('http') ? rawLink
     : rawLink ? 'https://doterra.mastercontrol.com' + rawLink
     : '';
@@ -1417,24 +1419,8 @@ function renderMember(name){
       <div><div class="card-title">Completion History</div><div class="card-subtitle">Per week from imported MC report</div></div>
     </div>
     <div class="chart-wrap" style="height:170px"><canvas id="chart-member-hist"></canvas></div>
-    <script>window.__memberHist=${JSON.stringify({hist:memberH,color:mc.color,bg:mc.bg})};<\/script>
-    ${!memberCompleted.length && !memberDoneWF.length ? '<div class="text-subtle text-sm" style="padding:8px 4px 0">Import completed task reports via Settings to populate this chart.</div>' : ''}
-  </div>
-
-  <div class="card" style="margin-bottom:14px;border-color:var(--warning);background:var(--warning-bg)" id="debug-panel">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-      <div class="card-title" style="color:var(--warning)">Debug Panel (remove after testing)</div>
-      <button class="btn btn-sm" onclick="document.getElementById('debug-panel').remove()">Dismiss</button>
-    </div>
-    <div class="text-sm" style="line-height:2">
-      WF completed tasks for ${name}: <strong>${memberDoneWF.length}</strong>
-      (total WF tasks: ${(state.wfData?.tasks||[]).length}, completed: ${(state.wfData?.tasks||[]).filter(t=>t.status==='completed').length})<br>
-      MC report tasks for ${name}: <strong>${memberDoneMC.length}</strong><br>
-      memberH data points: <strong>${memberH.length}</strong>, non-zero weeks: <strong>${memberH.filter(w=>w.completed>0).length}</strong><br>
-      Sample WF completed task: <code style="font-size:11px">${JSON.stringify((memberDoneWF[0]||{assignee:'none',completedDate:'none',title:'none'}), ['assignee','completedDate','title','status']).slice(0,200)}</code><br>
-      Sample active MC task packetid: <strong>${sorted[0]?.id||'none'}</strong><br>
-      MC link for first task: <code style="font-size:11px">${sorted[0]?.mcLink||'none'}</code>
-    </div>
+    <div id='member-hist-data' style='display:none'>${JSON.stringify({hist:memberH,color:mc.color,bg:mc.bg}).replace(/</g,'&lt;')}</div>
+    ${memberH.every(w=>w.completed===0) ? '<div class="text-subtle text-sm" style="padding:8px 4px 0">Import completed task reports via Settings to populate this chart.</div>' : ''}
   </div>
 
   <div class="full-row card">
@@ -1541,7 +1527,10 @@ function buildPendingChart(){
 }
 
 function buildMemberHistChart(){
-  const d=window.__memberHist;
+  const el = document.getElementById('member-hist-data');
+  if(!el) return;
+  let d;
+  try{ d = JSON.parse(el.textContent || el.innerHTML.replace(/&lt;/g,'<')); }catch(e){ return; }
   if(!d) return;
   const {hist,color,bg}=d;
   mkChart('chart-member-hist',{type:'line',
