@@ -745,21 +745,47 @@ function handleWFImport(file){
                       || Object.values(rowLinks)[0]
                       || '';
 
+          // Source column: Queue Topic for Issues, Project Name for Tasks
+          const wfSource = isIssue
+            ? (r['Queue Topic: Category Name']||r['Queue Topic']||r['Category']||'')
+            : (r['Project: Name']||r['Project Name']||r['Project']||project||'');
+
+          // Planned Start Date (Tasks only)
+          const plannedStart = normalizeDate(
+            r['Planned Start Date']||r['Planned Start']||r['Start Date']||r['Actual Start Date']||null
+          );
+
+          // Project link (Tasks export has hyperlink on Project: Name column)
+          // Already captured in wfLink for name cell; project link may be on a different col
+          const projectLink = (() => {
+            // Find project col index — col B in tasks export has project hyperlink
+            for(let C = range.s.c; C <= range.e.c; C++){
+              const hdr = ws[XLSX.utils.encode_cell({r:range.s.r, c:C})];
+              if(hdr && /project.*name/i.test(String(hdr.v||''))){
+                return (hyperlinkMap[sheetRowIdx]||{})[C] || '';
+              }
+            }
+            return '';
+          })();
+
           return {
-            id:           r['Ref #']||r['Task ID']||r['ID']||'WF-'+(i+1),
+            id:             r['Ref #']||r['Task ID']||r['ID']||'WF-'+(i+1),
             title,
             assignee,
             status,
             dueDate,
-            queuedDate:   entryDate,
+            plannedStart,
+            queuedDate:     entryDate,
             completedDate,
-            priority:     normalizePriority(priority),
+            priority:       normalizePriority(priority),
             project,
-            wfName:       project,
-            type:         r['Task Type']||r['Type']||(isIssue?'WF Issue':'WF Task'),
-            stepName:     r['Task Type']||r['Type']||(isIssue?'Issue':'Task'),
+            wfName:         project,
+            wfSource,
+            projectLink,
+            type:           r['Task Type']||r['Type']||(isIssue?'WF Issue':'WF Task'),
+            stepName:       r['Task Type']||r['Type']||(isIssue?'Issue':'Task'),
             wfLink,
-            source:       isIssue ? 'WF Issue' : 'WF Task',
+            source:         isIssue ? 'WF Issue' : 'WF Task',
           };
         });
       }
@@ -1147,47 +1173,63 @@ function getUpcomingTasks(){
   const fwd=new Date(now); fwd.setDate(fwd.getDate()+14);
   return allTasks().filter(t=>{
     if(t.status==='completed') return false;
-    if(!t.dueDate) return false;
-    const d=new Date(t.dueDate);
-    return d<fwd;
-  }).sort((a,b)=>new Date(a.dueDate)-new Date(b.dueDate)).slice(0,12);
+    // Use dueDate, plannedStart, or queuedDate — whichever is available
+    const dateToCheck = t.dueDate || t.plannedStart || t.queuedDate;
+    if(!dateToCheck) return false;
+    const d = new Date(dateToCheck);
+    return d < fwd;
+  }).sort((a,b)=>{
+    const da = new Date(a.dueDate||a.plannedStart||a.queuedDate||0);
+    const db = new Date(b.dueDate||b.plannedStart||b.queuedDate||0);
+    return da - db;
+  }).slice(0,12);
 }
 
 function renderTaskTable(tasks, showSource=true){
   if(!tasks.length) return '<div class="text-muted text-sm" style="padding:12px 4px">No tasks found.</div>';
-  // Determine if any tasks have a real due date (Workfront) or only a queued date (MC)
-  const hasRealDue = tasks.some(t => t.dueDate);
   return `
   <div style="overflow-x:auto">
   <table class="data-table">
     <thead><tr>
       <th>Task</th><th>Step / Type</th><th>Assignee</th>
-      <th>${hasRealDue ? 'Due' : 'In Queue Since'}</th>
+      <th>Source</th>
+      <th>Date</th>
       <th>Status</th>
-      ${showSource?'<th>Source</th>':''}
+      ${showSource?'<th>System</th>':''}
       <th></th>
     </tr></thead>
     <tbody>
       ${tasks.map(t=>{
         const isOD = isOverdue(t);
-        const displayDate = t.dueDate ? formatDate(t.dueDate)
-                          : t.queuedDate ? formatDate(t.queuedDate)
-                          : '—';
-        const dateStyle = isOD ? 'color:var(--danger)' : '';
         const taskLink = t.mcLink || t.wfLink || '';
+        // Date: prefer dueDate, then plannedStart, then queuedDate
+        const displayDate = t.dueDate      ? formatDate(t.dueDate)
+                          : t.plannedStart ? formatDate(t.plannedStart)
+                          : t.queuedDate   ? formatDate(t.queuedDate)
+                          : '—';
+        const dateSub = !t.dueDate && t.plannedStart ? '<span class="text-subtle" style="font-size:10px;display:block">planned start</span>'
+                      : !t.dueDate && t.queuedDate   ? '<span class="text-subtle" style="font-size:10px;display:block">in queue since</span>'
+                      : '';
+        const dateStyle = isOD ? 'color:var(--danger)' : '';
         const titleHtml = taskLink
           ? `<a href="${taskLink}" target="_blank" style="color:var(--text);text-decoration:none;font-weight:500" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">${t.title} <span style="font-size:10px;opacity:.5">↗</span></a>`
           : `<span class="font-medium">${t.title}</span>`;
+        // Source: wfSource (Queue Topic / Project Name) for WF, route name for MC
+        const sourceDisplay = t.wfSource || t.workflow || '—';
+        const sourceLink    = t.projectLink || '';
+        const sourceHtml = sourceLink
+          ? `<a href="${sourceLink}" target="_blank" style="color:var(--text-muted);font-size:12px;text-decoration:none" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text-muted)'">${sourceDisplay} <span style="font-size:10px;opacity:.5">↗</span></a>`
+          : `<span class="text-sm text-muted">${sourceDisplay}</span>`;
         return `
         <tr class="${isOD?'overdue-row':''}">
           <td>
             ${titleHtml}
             ${isOD?'<span class="badge badge-danger" style="margin-left:6px;font-size:10px">Overdue</span>':''}
-            ${t.wfName&&t.wfName!==t.title?`<div class="text-xs text-subtle" style="margin-top:2px">${t.wfName}</div>`:''}
           </td>
           <td class="text-xs text-muted">${t.stepName||t.type||'—'}</td>
           <td>${t.assignee||'—'}</td>
-          <td class="text-sm" style="${dateStyle}">${displayDate}</td>
+          <td>${sourceHtml}</td>
+          <td class="text-sm" style="${dateStyle}">${displayDate}${dateSub}</td>
           <td>${statusBadge(t.status)}</td>
           ${showSource?`<td><span class="tag">${t.source||'MC'}</span></td>`:''}
           <td>${taskLink?`<a href="${taskLink}" target="_blank" class="btn btn-sm" style="font-size:11px;padding:3px 8px">Open ↗</a>`:''}</td>
@@ -1197,124 +1239,6 @@ function renderTaskTable(tasks, showSource=true){
   </table>
   </div>`;
 }
-
-// ── TRENDS ──
-function renderTrends(){
-  const h=state.history;
-  const prevW  = h.length>=2  ? h[h.length-2]  : null;
-  const prevM  = h.length>=5  ? h[h.length-5]  : null;
-  const prevY  = h.length>=53 ? h[0]            : null;
-  const cur    = h.length     ? h[h.length-1]   : null;
-
-  function chip(cur, prev, field, lowerBetter=false){
-    if(!prev||cur===null) return '';
-    const d=Math.round((cur[field]||0)-(prev[field]||0));
-    if(d===0) return '';
-    const good = lowerBetter ? d<0 : d>0;
-    return `<span class="badge ${good?'badge-success':'badge-danger'}" style="font-size:10px">${d>0?'+':''}${d}</span>`;
-  }
-
-  return `
-  <div class="page-header">
-    <div><div class="page-title">Trends</div><div class="page-subtitle">${h.length}-week rolling history</div></div>
-  </div>
-
-  <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
-    <div class="kpi-card">
-      <div class="kpi-label">Completed Tasks</div>
-      <div class="kpi-value" style="color:var(--success)">${cur?cur.docCompleted:0}</div>
-      <div class="kpi-delta neutral" style="gap:6px;flex-wrap:wrap">
-        ${chip(cur,prevW,'docCompleted')} vs last week
-        ${prevM?chip(cur,prevM,'docCompleted')+' vs last month':''}
-        ${prevY?chip(cur,prevY,'docCompleted')+' vs last year':''}
-      </div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Pending Tasks</div>
-      <div class="kpi-value" style="color:var(--accent)">${cur?cur.docPending:0}</div>
-      <div class="kpi-delta neutral" style="gap:6px;flex-wrap:wrap">
-        ${chip(cur,prevW,'docPending',true)} vs last week
-        ${prevM?chip(cur,prevM,'docPending',true)+' vs last month':''}
-      </div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Overdue Items</div>
-      <div class="kpi-value" style="color:${(cur?.overdueCount||0)>0?'var(--danger)':'var(--success)'}">${cur?cur.overdueCount:0}</div>
-      <div class="kpi-delta neutral" style="gap:6px;flex-wrap:wrap">
-        ${chip(cur,prevW,'overdueCount',true)} vs last week
-        ${prevM?chip(cur,prevM,'overdueCount',true)+' vs last month':''}
-      </div>
-    </div>
-  </div>
-
-  <div class="two-col">
-    <div class="card">
-      <div class="card-header"><div><div class="card-title">Task Completion Velocity</div><div class="card-subtitle">Completed tasks per week</div></div></div>
-      <div class="chart-wrap" style="height:210px"><canvas id="chart-velocity"></canvas></div>
-    </div>
-    <div class="card">
-      <div class="card-header"><div><div class="card-title">Overdue Count</div><div class="card-subtitle">Weekly snapshot — lower is better</div></div></div>
-      <div class="chart-wrap" style="height:210px"><canvas id="chart-overdue"></canvas></div>
-    </div>
-  </div>
-  <div class="full-row card">
-    <div class="card-header"><div><div class="card-title">Pending vs Completed</div><div class="card-subtitle">Weekly stacked view</div></div></div>
-    <div class="chart-wrap" style="height:220px"><canvas id="chart-pending"></canvas></div>
-  </div>`;
-}
-
-// ── ALL TASKS ──
-function renderAllTasks(){
-  const tasks = allTasks().sort((a,b)=>{
-    if(isOverdue(a)&&!isOverdue(b)) return -1;
-    if(!isOverdue(a)&&isOverdue(b)) return 1;
-    return new Date(a.dueDate)-new Date(b.dueDate);
-  });
-  return `
-  <div class="page-header">
-    <div><div class="page-title">All Tasks</div><div class="page-subtitle">${tasks.length} items across all sources</div></div>
-    <div class="header-actions">
-      <select class="btn btn-sm" id="filt-status" onchange="applyFilters()" style="cursor:pointer">
-        <option value="">All statuses</option>
-        <option value="pending">Pending</option>
-        <option value="in_progress">In Progress</option>
-        <option value="completed">Completed</option>
-      </select>
-      <select class="btn btn-sm" id="filt-member" onchange="applyFilters()" style="cursor:pointer">
-        <option value="">All members</option>
-        ${state.settings.members.map(m=>`<option value="${m}">${m}</option>`).join('')}
-      </select>
-      <select class="btn btn-sm" id="filt-source" onchange="applyFilters()" style="cursor:pointer">
-        <option value="">All sources</option>
-        <option value="MasterControl">MasterControl</option>
-        <option value="WF Task">Workfront Tasks</option>
-        <option value="WF Issue">Workfront Issues</option>
-      </select>
-    </div>
-  </div>
-  <div class="card">
-    <div id="task-wrap">${renderTaskTable(tasks,true)}</div>
-  </div>`;
-}
-
-function applyFilters(){
-  const status = document.getElementById('filt-status')?.value;
-  const member = document.getElementById('filt-member')?.value;
-  const source = document.getElementById('filt-source')?.value;
-  let tasks = allTasks();
-  if(status) tasks=tasks.filter(t=>t.status===status);
-  if(member) tasks=tasks.filter(t=>normName(t.assignee)===normName(member));
-  if(source) tasks=tasks.filter(t=>t.source===source||t.source?.startsWith(source));
-  tasks.sort((a,b)=>{
-    if(isOverdue(a)&&!isOverdue(b)) return -1;
-    if(!isOverdue(a)&&isOverdue(b)) return 1;
-    return new Date(a.dueDate)-new Date(b.dueDate);
-  });
-  const wrap=document.getElementById('task-wrap');
-  if(wrap) wrap.innerHTML=renderTaskTable(tasks,true);
-}
-
-// ── MEMBER VIEW ──
 function renderMember(name){
   if(!name) return renderTeam();
   const s  = getMemberSummary(name);
