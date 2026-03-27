@@ -183,6 +183,10 @@
       <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="2" y1="14" x2="2" y2="6"/><line x1="6" y1="14" x2="6" y2="2"/><line x1="10" y1="14" x2="10" y2="8"/><line x1="14" y1="14" x2="14" y2="4"/></svg>
       KPIs
     </div>
+    <div class="nav-item" onclick="showView('schedule')" id="nav-schedule">
+      <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="1.5"/><line x1="5" y1="1" x2="5" y2="5"/><line x1="11" y1="1" x2="11" y2="5"/><line x1="2" y1="7" x2="14" y2="7"/></svg>
+      Schedule
+    </div>
     <div class="sidebar-section">Filters</div>
     <div id="sidebar-filters" style="padding:0 8px 8px"></div>
 
@@ -319,8 +323,9 @@ let state = {
   selectedMember:null,
   syncing:false,
   period:'current',  // 'current' | '30d' | '90d' | 'all'
-  kpiRules: null,      // loaded from router import + user edits
-  scheduleData: null,  // current week assignment: [{person, taskName, routerName}]
+  kpiRules: null,
+  scheduleData: null,   // legacy import — replaced by built-in schedule
+  schedule: {},         // { 'YYYY-WW': { ptoNote, tasks:[{taskId, assignee, qty, notes}] } }
   teamFilter:{ source:[], workflow:[], wfSource:[] },
 };
 
@@ -332,6 +337,9 @@ function loadState(){
     const s = localStorage.getItem('qms_v3');
     if(s) Object.assign(state, JSON.parse(s));
   }catch(e){}
+
+  // Rebuild schedule data from built-in schedule
+  if(state.schedule && Object.keys(state.schedule).length) rebuildScheduleData();
 
   // Purge demo history snapshots if real data exists
   if(state.lastSync && state.lastSync !== 'demo mode'){
@@ -1173,7 +1181,8 @@ function render(){
   el.innerHTML = v==='team'   ? renderTeam()
                : v==='trends' ? renderTrends()
                : v==='tasks'  ? renderAllTasks()
-               : v==='kpis'   ? renderKPIs()
+               : v==='kpis'      ? renderKPIs()
+               : v==='schedule'  ? renderSchedule()
                : v==='member' ? renderMember(state.selectedMember)
                : '';
   setTimeout(attachCharts,60);
@@ -1723,6 +1732,193 @@ function renderKPIs(){
   }).join('')}`;
 }
 
+// ── SCHEDULE PAGE ──
+// ── MEMBER SCHEDULE CARD (shown on individual pages) ──
+function renderMemberSchedule(name){
+  const thisWeekStart = getWeekDates(0);
+  const wk = getScheduleWeek(thisWeekStart);
+  const myTasks = wk.tasks.filter(t => {
+    if(!t.assignee) return false;
+    return t.assignee.split('/').some(p => normName(p.trim()) === normName(name));
+  });
+
+  if(myTasks.length === 0){
+    const hasAnySchedule = Object.values(state.schedule).some(w =>
+      w.tasks.some(t => t.assignee && t.assignee.split('/').some(p => normName(p.trim()) === normName(name)))
+    );
+    if(!hasAnySchedule) return '';  // No schedule data at all — don't show card
+    return `
+    <div class="full-row card" style="margin-bottom:14px">
+      <div class="card-header"><div class="card-title">This Week's Schedule</div><div class="card-subtitle">${weekLabel(thisWeekStart)}</div></div>
+      <div class="text-sm text-muted" style="padding:4px">${wk.ptoNote ? '⚠ '+wk.ptoNote+' · ' : ''}No tasks assigned this week.</div>
+    </div>`;
+  }
+
+  const totalHrs = myTasks.reduce((s,t) => {
+    const rt = ROUTER_TASKS.find(r => r.id === t.taskId);
+    return s + (rt ? t.qty * rt.hrs : 0);
+  }, 0);
+
+  return `
+  <div class="full-row card" style="margin-bottom:14px">
+    <div class="card-header">
+      <div><div class="card-title">This Week's Schedule</div>
+      <div class="card-subtitle">${weekLabel(thisWeekStart)} · ${myTasks.length} task types · ${totalHrs.toFixed(1)}h est.</div></div>
+      <button class="btn btn-sm" onclick="showView('schedule')">Edit schedule →</button>
+    </div>
+    ${wk.ptoNote ? `<div style="padding:6px 10px;background:var(--warning-bg);border-radius:var(--radius-sm);font-size:12px;color:var(--warning);margin-bottom:10px">⚠ ${wk.ptoNote}</div>` : ''}
+    <table class="data-table">
+      <thead><tr><th>Task</th><th>Role</th><th style="text-align:right">Qty</th><th style="text-align:right">Est Hours</th><th>Notes</th></tr></thead>
+      <tbody>
+        ${myTasks.map(t => {
+          const rt = ROUTER_TASKS.find(r => r.id === t.taskId);
+          if(!rt) return '';
+          const hrs = (t.qty * rt.hrs).toFixed(1);
+          const isKPI = ['mc_artwork_upload','assembly_spec','fps_global','change_control'].some(k => {
+            const rule = DEFAULT_KPI_RULES.find(r => r.id === k);
+            return rule && rule.matchFn({source:'WF Task',title:rt.name,workflow:rt.name});
+          });
+          return `<tr>
+            <td>
+              <span class="font-medium" style="font-size:12px">${rt.name}</span>
+              ${isKPI ? '<span class="badge badge-purple" style="margin-left:6px;font-size:10px">KPI</span>' : ''}
+            </td>
+            <td class="text-xs text-muted">${rt.role}</td>
+            <td style="text-align:right;font-weight:500">${t.qty}</td>
+            <td style="text-align:right;color:var(--text-muted);font-size:12px">${hrs}h</td>
+            <td class="text-xs text-muted">${t.notes||'—'}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function renderSchedule(){
+  // Build 4 weeks: current + 3 ahead
+  const weeks = [0,1,2,3].map(i => {
+    const start = getWeekDates(i);
+    const key   = weekKey(start);
+    const wk    = getScheduleWeek(start);
+    return { start, key, label: weekLabel(start), wk };
+  });
+
+  // Group Router tasks by role
+  const roles = [...new Set(ROUTER_TASKS.map(t => t.role))];
+
+  const activeWeekIdx = parseInt(localStorage.getItem('sched_active_week')||'0');
+
+  return `
+  <div class="page-header">
+    <div>
+      <div class="page-title">Schedule</div>
+      <div class="page-subtitle">Assign tasks · set quantities · note PTO</div>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-sm" onclick="exportSchedule()">↓ Export CSV</button>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:4px;margin-bottom:16px;background:var(--surface2);padding:4px;border-radius:var(--radius-sm);width:fit-content">
+    ${weeks.map((w,i)=>`
+      <button id="sched-tab-${i}" onclick="setSchedTab(${i})"
+        style="padding:6px 14px;font-size:13px;border-radius:var(--radius-sm);border:none;cursor:pointer;font-family:inherit;transition:all .15s;
+          background:${i===activeWeekIdx?'var(--surface)':'transparent'};
+          color:${i===activeWeekIdx?'var(--text)':'var(--text-muted)'};
+          font-weight:${i===activeWeekIdx?'500':'400'};
+          box-shadow:${i===activeWeekIdx?'var(--shadow)':'none'}">
+        ${i===0?'This week':i===1?'Next week':'Week '+(i+1)}<br>
+        <span style="font-size:10px;opacity:.7">${w.label}</span>
+      </button>`).join('')}
+  </div>
+
+  ${weeks.map((w,i)=>`
+  <div id="sched-week-${i}" style="display:${i===activeWeekIdx?'block':'none'}">
+
+    <div class="card" style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--warning)" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><line x1="8" y1="5" x2="8" y2="8"/><line x1="8" y1="11" x2="8" y2="11.5" stroke-width="2"/></svg>
+        <span style="font-size:12px;font-weight:500;color:var(--text-muted)">PTO / Team Notes</span>
+        <input type="text" value="${w.wk.ptoNote||''}"
+          placeholder="e.g. Kara out Mon–Tue, Casey WFH Thu"
+          onchange="savePTONote('${w.start.toISOString()}', this.value)"
+          style="flex:1;padding:5px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text);font-size:12px;font-family:inherit;outline:none">
+      </div>
+    </div>
+
+    <div class="card">
+      <table class="data-table">
+        <thead><tr>
+          <th style="width:35%">Task Type</th>
+          <th>Role</th>
+          <th style="width:160px">Assigned To</th>
+          <th style="width:80px">Qty</th>
+          <th style="width:60px">Hrs</th>
+          <th>Notes</th>
+        </tr></thead>
+        <tbody>
+          ${roles.map(role => {
+            const roleTasks = ROUTER_TASKS.filter(rt => rt.role === role);
+            return roleTasks.map((rt, ri) => {
+              const schedTask = w.wk.tasks.find(t => t.taskId === rt.id) || {assignee:'', qty:rt.qty, notes:''};
+              const totalHrs  = (schedTask.qty * rt.hrs).toFixed(1);
+              const isAssigned = !!schedTask.assignee;
+              return `
+              <tr style="${isAssigned?'':'opacity:.6'}">
+                ${ri===0?`<td rowspan="${roleTasks.length}" style="vertical-align:top;padding-top:10px;border-right:1px solid var(--border);font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-subtle);white-space:nowrap">${role}</td>`:''}
+                <td>
+                  <div class="font-medium" style="font-size:12px">${rt.name}</div>
+                </td>
+                <td>
+                  <select onchange="saveScheduleField('${w.start.toISOString()}','${rt.id}','assignee',this.value)"
+                    style="width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text);font-size:12px;font-family:inherit;outline:none;cursor:pointer">
+                    <option value="">— unassigned —</option>
+                    ${state.settings.members.map(m=>`<option value="${m}" ${schedTask.assignee===m?'selected':''}>${m}</option>`).join('')}
+                    <option value="TBD" ${schedTask.assignee==='TBD'?'selected':''}>TBD</option>
+                  </select>
+                </td>
+                <td>
+                  <input type="number" value="${schedTask.qty}" min="0" step="0.25"
+                    onchange="saveScheduleField('${w.start.toISOString()}','${rt.id}','qty',parseFloat(this.value)||0)"
+                    style="width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text);font-size:12px;font-family:inherit;outline:none;text-align:right">
+                </td>
+                <td style="font-size:11px;color:var(--text-subtle);text-align:right">${totalHrs}h</td>
+                <td>
+                  <input type="text" value="${schedTask.notes||''}" placeholder="optional"
+                    onchange="saveScheduleField('${w.start.toISOString()}','${rt.id}','notes',this.value)"
+                    style="width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text);font-size:12px;font-family:inherit;outline:none">
+                </td>
+              </tr>`;
+            }).join('');
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`).join('')}`;
+}
+
+function setSchedTab(idx){
+  localStorage.setItem('sched_active_week', idx);
+  render();
+}
+
+function exportSchedule(){
+  const weeks = [0,1,2,3].map(i => {
+    const start = getWeekDates(i);
+    return { label: weekLabel(start), wk: getScheduleWeek(start) };
+  });
+  const rows = [];
+  weeks.forEach(w => {
+    ROUTER_TASKS.forEach(rt => {
+      const t = w.wk.tasks.find(x=>x.taskId===rt.id)||{assignee:'',qty:rt.qty,notes:''};
+      rows.push({ Week:w.label, Role:rt.role, Task:rt.name, 'Assigned To':t.assignee||'Unassigned',
+        'Est Qty':t.qty, 'Hrs/Task':rt.hrs, 'Total Hrs':(t.qty*rt.hrs).toFixed(1), Notes:t.notes||'', PTO:w.wk.ptoNote||'' });
+    });
+  });
+  const now = new Date().toISOString().split('T')[0];
+  exportToCSV(rows, `schedule-${now}.csv`);
+}
+
 function applyFilters(){
   const status = document.getElementById('filt-status')?.value;
   const member = document.getElementById('filt-member')?.value;
@@ -1821,6 +2017,8 @@ function renderMember(name){
     <div id='member-hist-data' style='display:none'>${JSON.stringify({hist:memberH,color:mc.color,bg:mc.bg}).replace(/</g,'&lt;')}</div>
     ${memberH.every(w=>w.completed===0) ? '<div class="text-subtle text-sm" style="padding:8px 4px 0">Import completed task reports via Settings to populate this chart.</div>' : ''}
   </div>
+
+  ${renderMemberSchedule(name)}
 
   <div class="full-row card">
     <div class="card-header">
@@ -2023,6 +2221,130 @@ document.getElementById('settings-modal').addEventListener('click',e=>{
   if(e.target===document.getElementById('settings-modal')) closeSettings();
 });
 
+
+// ─────────────────────────────────────────────
+// ROUTER TASK DEFINITIONS (from FTE spreadsheet)
+// ─────────────────────────────────────────────
+const ROUTER_TASKS = [
+  {id:'ots',  name:'Oil Testing Specification (OTS) - Global',                   qty:4,   hrs:1.75, role:'Specialist I - Global'},
+  {id:'bs',   name:'Bulk Specification (BS) - Global',                           qty:1,   hrs:1.08, role:'Specialist I - Global'},
+  {id:'ofr',  name:'Oil Formula Review - Global',                                qty:2,   hrs:0.25, role:'Specialist I - Global'},
+  {id:'sfr',  name:'Supplement Formula Review - Global',                         qty:3,   hrs:0.42, role:'Specialist I - Global'},
+  {id:'cfr',  name:'Cosmetic Formula Review - Global',                           qty:4,   hrs:0.33, role:'Specialist I - Global'},
+  {id:'icr',  name:'Ingredient Comparison Review (IC) - Global',                 qty:2,   hrs:0.33, role:'Specialist I - Global'},
+  {id:'oad',  name:'Oil Allergen Declaration Review - Global',                   qty:4,   hrs:0.33, role:'Specialist I - Global'},
+  {id:'art1', name:'Proof HQ Artwork Review - Label (Oils) - Global',            qty:32,  hrs:0.25, role:'Specialist I - Global'},
+  {id:'art2', name:'Proof HQ Artwork Review - Label (Cosmetic) - Global',        qty:16,  hrs:0.33, role:'Specialist I - Global'},
+  {id:'art3', name:'Proof HQ Artwork Review - Label (Supplement) - Global',      qty:18,  hrs:0.42, role:'Specialist I - Global'},
+  {id:'art4', name:'Proof HQ Artwork Review - PIPs & Print Material',            qty:8,   hrs:0.17, role:'Specialist I - Global'},
+  {id:'pbs',  name:'Packaging BOM Specification (PBS) - Global',                 qty:1,   hrs:1.08, role:'Specialist I - Global'},
+  {id:'cs',   name:'Component Specification (CS) - Global',                      qty:1,   hrs:1.08, role:'Specialist I - Global'},
+  {id:'fmm',  name:'Foreign Market Managed Specification (FMM) - Global',        qty:2,   hrs:1.92, role:'Specialist I - Global'},
+  {id:'fps1', name:'Finished Product Specification (FPS) - Global - 1',          qty:16,  hrs:1.42, role:'Specialist I - Global'},
+  {id:'fps2', name:'Finished Product Specification (FPS) - Global - 2',          qty:16,  hrs:1.42, role:'Specialist I - Global'},
+  {id:'ing',  name:'Ingredient Specification (ING) - Regional (Non-Oil)',        qty:1,   hrs:1.00, role:'Specialist I - Regional'},
+  {id:'as',   name:'Assembly Specification (AS) - Regional',                     qty:28,  hrs:1.08, role:'Specialist I - Regional'},
+  {id:'fpsr', name:'Finished Product Specification (FPS) - Regional',            qty:4,   hrs:1.25, role:'Specialist I - Regional'},
+  {id:'art5', name:'Artwork Approval (ART) - Regional',                          qty:6,   hrs:0.33, role:'Specialist I - Regional'},
+  {id:'mcu1', name:'MC Artwork Upload - Regional - PG',                          qty:30,  hrs:0.42, role:'Specialist I - Regional'},
+  {id:'mcu2', name:'MC Artwork Upload - Regional - LFC',                         qty:30,  hrs:0.42, role:'Specialist I - Regional'},
+  {id:'man1', name:'Manuals/Policies/Plans/Job Descriptions - Global',           qty:2,   hrs:3.50, role:'Specialist II - Global'},
+  {id:'sop1', name:'SOP/Work Instructions - Global',                             qty:2,   hrs:3.50, role:'Specialist II - Global'},
+  {id:'frm1', name:'Forms - Global',                                             qty:1,   hrs:2.50, role:'Specialist II - Global'},
+  {id:'man2', name:'Manuals/Policies/Plans/Job Descriptions - Regional',         qty:2,   hrs:3.50, role:'Specialist II - Regional'},
+  {id:'sop2', name:'SOP/Work Instructions - Regional',                           qty:3,   hrs:3.00, role:'Specialist II - Regional'},
+  {id:'frm2', name:'Forms - Regional',                                           qty:4,   hrs:2.50, role:'Specialist II - Regional'},
+  {id:'devg', name:'Deviations - Global',                                        qty:14,  hrs:1.33, role:'Specialist III - Global'},
+  {id:'ccg',  name:'Change Control - Global',                                    qty:14,  hrs:1.75, role:'Specialist III - Global'},
+  {id:'capa', name:'CAPA - Global',                                              qty:0.25,hrs:2.00, role:'Specialist III - Global'},
+  {id:'audg', name:'Audit Prep Global',                                          qty:1,   hrs:0.50, role:'Specialist III - Global'},
+  {id:'devr', name:'Deviations - Regional',                                      qty:5,   hrs:1.33, role:'Specialist III - Regional'},
+  {id:'ccr',  name:'Change Control - Regional',                                  qty:14,  hrs:1.75, role:'Specialist III - Regional'},
+  {id:'iaud', name:'Internal Audit',                                             qty:5,   hrs:0.75, role:'Specialist III - Regional'},
+  {id:'audr', name:'Audit Prep Regional',                                        qty:2,   hrs:0.50, role:'Specialist III - Regional'},
+];
+
+// Get ISO week key for a date: 'YYYY-WW'
+function weekKey(date){
+  const d = new Date(date);
+  d.setHours(0,0,0,0);
+  d.setDate(d.getDate() + 4 - (d.getDay()||7));
+  const yearStart = new Date(d.getFullYear(),0,1);
+  const wk = Math.ceil((((d-yearStart)/86400000)+1)/7);
+  return d.getFullYear()+'-'+String(wk).padStart(2,'0');
+}
+
+function weekLabel(date){
+  const d = new Date(date);
+  const day = d.getDay();
+  const mon = new Date(d); mon.setDate(d.getDate()-(day===0?6:day-1));
+  const fri = new Date(mon); fri.setDate(mon.getDate()+4);
+  const fmt = dt => dt.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  return fmt(mon)+' – '+fmt(fri);
+}
+
+function getWeekDates(weeksAhead=0){
+  const now = new Date();
+  now.setDate(now.getDate() + weeksAhead*7);
+  const day = now.getDay();
+  const mon = new Date(now); mon.setDate(now.getDate()-(day===0?6:day-1)); mon.setHours(0,0,0,0);
+  return mon;
+}
+
+function getScheduleWeek(weekStart){
+  const key = weekKey(weekStart);
+  if(!state.schedule[key]){
+    state.schedule[key] = { ptoNote:'', tasks: ROUTER_TASKS.map(rt=>({
+      taskId: rt.id, assignee:'', qty: rt.qty, notes:''
+    }))};
+  }
+  return state.schedule[key];
+}
+
+function saveScheduleField(weekStart, taskId, field, value){
+  const key = weekKey(weekStart);
+  const wk  = getScheduleWeek(weekStart);
+  const task = wk.tasks.find(t=>t.taskId===taskId);
+  if(task) task[field] = value;
+  else if(field==='ptoNote') wk.ptoNote = value;
+  state.schedule[key] = wk;
+  persist();
+  // Re-derive scheduleData from built-in schedule for KPI engine
+  rebuildScheduleData();
+}
+
+function savePTONote(weekStart, value){
+  const key = weekKey(weekStart);
+  const wk  = getScheduleWeek(weekStart);
+  wk.ptoNote = value;
+  state.schedule[key] = wk;
+  persist();
+}
+
+// Rebuild scheduleData (used by KPI engine) from built-in schedule
+function rebuildScheduleData(){
+  const assignments = [];
+  Object.entries(state.schedule).forEach(([key, wk])=>{
+    (wk.tasks||[]).forEach(t=>{
+      if(!t.assignee) return;
+      const rt = ROUTER_TASKS.find(r=>r.id===t.taskId);
+      if(!rt) return;
+      // Match to KPI rule
+      let kpiId = null;
+      const name = rt.name.toLowerCase();
+      if(/mc artwork upload|artwork upload/i.test(rt.name)) kpiId='mc_artwork_upload';
+      else if(/assembly spec/i.test(rt.name))               kpiId='assembly_spec';
+      else if(/finished product spec|fps/i.test(rt.name))   kpiId='fps_global';
+      else if(/change control/i.test(rt.name))              kpiId='change_control';
+      t.assignee.split('/').forEach(p=>{
+        const person = p.trim();
+        if(person) assignments.push({ person, taskName:rt.name, kpiId, weekLabel:key });
+      });
+    });
+  });
+  state.scheduleData = assignments;
+}
+
 // ─────────────────────────────────────────────
 // KPI ENGINE
 // ─────────────────────────────────────────────
@@ -2196,20 +2518,25 @@ function handleScheduleImport(file){
         for(let i = 0; i < rows.length; i++){
           const row = rows[i];
           if(!row) continue;
-          const person   = row[1]; // col B
-          const taskName = row[2]; // col C
+          // SheetJS trims leading empty cols, so Nicole lands at index 0 not 1
+          // Try both index 0 and index 1 for person
+          const personRaw = (row[0] && typeof row[0]==='string' && row[0].trim()) ? row[0]
+                          : (row[1] && typeof row[1]==='string' && row[1].trim()) ? row[1]
+                          : null;
+          const taskRaw   = (row[0] && typeof row[0]==='string' && row[0].trim()) ? row[1]  // if person at 0, task at 1
+                          : (row[1] && typeof row[1]==='string' && row[1].trim()) ? row[2]  // if person at 1, task at 2
+                          : null;
+          const person   = personRaw ? String(personRaw).trim() : null;
+          const taskName = taskRaw   ? String(taskRaw).trim()   : null;
           if(!person || !taskName) continue;
-          if(typeof person !== 'string' || typeof taskName !== 'string') continue;
-          // Task name must be a plain string task description (not formula, not header label)
+          // Task name must be a real task description
           if(taskName.startsWith('=')) continue;
-          if(/^(Est Qty|Description|SME|Run Time|Comments|Total|Router|Qty)$/i.test(taskName.trim())) continue;
-          if(/^\d+$/.test(taskName.trim())) continue; // pure number
-          // Task name must match a known KPI-relevant task type (from Router)
-          const isKPITask = /artwork.*upload|upload.*artwork|add.*artwork|assembly spec|finished product spec|fps|change control|fp spec|ft spec/i.test(taskName);
-          // Person must look like a real first name — letter-based, not S1/S2/S3 prefix
-          if(/^S[123]/i.test(person.trim())) continue;
-          if(/^(Total|SME|Description|Artwork|Global|Regional|Position|PTO|Specialist)/i.test(person.trim())) continue;
-          if(!/^[A-Za-z]/.test(person.trim())) continue;
+          if(/^(Est Qty|Description|SME|Run Time|Comments|Total|Router|Qty|\d+)$/i.test(taskName)) continue;
+          // Person must be a real name — not S1/S2/S3, not task/category descriptions
+          if(/^S[123]/i.test(person)) continue;
+          if(/^(Total|SME|Description|Artwork|Global|Regional|Position|PTO|Specialist|CAPA|Deviation|Audit|Ingredient|Packaging|Component|Foreign|Proof|Oil|Bulk|Cosmetic|Supplement|Assembly|Finished|MC\s|Change|SOP|Manual|Form|Internal)/i.test(person)) continue;
+          if(/^(Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Jan|Feb)/i.test(person)) continue;
+          if(!/^[A-Z]/.test(person)) continue; // Must start with capital
 
           // Match schedule task name (from Router) to a KPI rule id
           // Router names like "MC Artwork Upload - Regional - PG" -> mc_artwork_upload
