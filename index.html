@@ -636,8 +636,6 @@ async function doSync(){
 
 // Auto-sync loop
 function startAutoSync(){
-// Auto-sync loop
-function startAutoSync(){
   setInterval(()=>{
     if(state.settings.mcUrl && state.settings.mcToken && !state.syncing) syncMasterControl();
   }, (state.settings.mcInterval||15)*60*1000);
