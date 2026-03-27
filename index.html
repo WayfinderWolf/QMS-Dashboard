@@ -2177,15 +2177,14 @@ function handleScheduleImport(file){
 
         debugInfo.push({sheet: sheetName, rows4to7: rows.slice(3,7)});
 
-        // Find header row — look for 'SME' and 'Description' in any cell
+        // Find FIRST header row (stop at first match — row 4 in schedule sheets)
         let headerRow = -1;
-        rows.forEach((row, i) => {
-          if(!row) return;
-          const vals = row.map(v => String(v||'').trim());
-          if(vals.includes('SME') && vals.includes('Description')) headerRow = i;
-        });
-        debugInfo[debugInfo.length-1].headerRow = headerRow;
-        if(headerRow < 0) return;
+        for(let i=0; i<Math.min(rows.length,15); i++){
+          const row=rows[i]; if(!row) continue;
+          const vals=row.map(v=>String(v||'').trim());
+          if(vals.includes('SME')&&vals.includes('Description')){ headerRow=i; break; }
+        }
+        if(headerRow<0) return;
 
         // Get week date from row 1 (e.g. "Mar 23rd-27th")
         const weekLabel = rows[1]?.find(v => v && typeof v === 'string' && /\w+\s+\d/.test(v)) || sheetName;
@@ -2197,8 +2196,13 @@ function handleScheduleImport(file){
           const person   = row[1]; // col B
           const taskName = row[2]; // col C
           if(!person || !taskName || typeof person !== 'string' || typeof taskName !== 'string') continue;
-          if(taskName.startsWith('=') || taskName.startsWith('S1') || taskName.startsWith('S2')) continue;
-          if(person.includes('Total') || person.includes('Spec') || person.includes('Global')) continue;
+          if(taskName.startsWith('=') || taskName.startsWith('S1') || taskName.startsWith('S2') || taskName.startsWith('S3')) continue;
+          // Person must look like a real name — starts with capital, no 'S1'/'S2'/'S3' prefix,
+          // not a task description, not a number
+          if(/^S[123]\s/i.test(person)) continue;
+          if(/^(Total|Spec|Artwork|Global|Regional|Position|Deviation|Change|Audit|Internal|Assembly|Finish|MC\s|Ingredient|Packaging|Component|Foreign|Proof|Oil|Bulk|Cosmetic|Supplement)/i.test(person)) continue;
+          if(/^\d/.test(person)) continue;
+          if(!person.match(/^[A-Z][a-z]/)) continue; // Must start with capital letter followed by lowercase
 
           // Match schedule task name (from Router) to a KPI rule id
           // Router names like "MC Artwork Upload - Regional - PG" -> mc_artwork_upload
