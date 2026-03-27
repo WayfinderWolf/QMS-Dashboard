@@ -1353,14 +1353,13 @@ function renderMember(name){
   const pct= s.tasks.length?Math.round(s.completed/s.tasks.length*100):0;
 
   // Build real per-member completion history from ALL imported sources
-  const memberDoneTasks = [
-    ...(state.wfData?.tasks||[]).filter(t=>
-      t.status==='completed' && normName(t.assignee)===normName(name) && t.completedDate
-    ),
-    ...(state.mcCompletedData?.tasks||[]).filter(t=>
-      normName(t.assignee)===normName(name) && t.completedDate
-    ),
-  ];
+  const memberDoneWF = (state.wfData?.tasks||[]).filter(t=>
+    t.status==='completed' && normName(t.assignee)===normName(name) && t.completedDate
+  );
+  const memberDoneMC = (state.mcCompletedData?.tasks||[]).filter(t=>
+    normName(t.assignee)===normName(name) && t.completedDate
+  );
+  const memberDoneTasks = [...memberDoneWF, ...memberDoneMC];
 
   // Build a simple weekly chart from the last 13 weeks using real completedDate values
   const now = new Date(); now.setHours(23,59,59,0);
@@ -1419,7 +1418,23 @@ function renderMember(name){
     </div>
     <div class="chart-wrap" style="height:170px"><canvas id="chart-member-hist"></canvas></div>
     <script>window.__memberHist=${JSON.stringify({hist:memberH,color:mc.color,bg:mc.bg})};<\/script>
-    ${!memberCompleted.length ? '<div class="text-subtle text-sm" style="padding:8px 4px 0">Import an MC completed tasks report via Settings to populate this chart.</div>' : ''}
+    ${!memberCompleted.length && !memberDoneWF.length ? '<div class="text-subtle text-sm" style="padding:8px 4px 0">Import completed task reports via Settings to populate this chart.</div>' : ''}
+  </div>
+
+  <div class="card" style="margin-bottom:14px;border-color:var(--warning);background:var(--warning-bg)" id="debug-panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div class="card-title" style="color:var(--warning)">Debug Panel (remove after testing)</div>
+      <button class="btn btn-sm" onclick="document.getElementById('debug-panel').remove()">Dismiss</button>
+    </div>
+    <div class="text-sm" style="line-height:2">
+      WF completed tasks for ${name}: <strong>${memberDoneWF.length}</strong>
+      (total WF tasks: ${(state.wfData?.tasks||[]).length}, completed: ${(state.wfData?.tasks||[]).filter(t=>t.status==='completed').length})<br>
+      MC report tasks for ${name}: <strong>${memberDoneMC.length}</strong><br>
+      memberH data points: <strong>${memberH.length}</strong>, non-zero weeks: <strong>${memberH.filter(w=>w.completed>0).length}</strong><br>
+      Sample WF completed task: <code style="font-size:11px">${JSON.stringify((memberDoneWF[0]||{assignee:'none',completedDate:'none',title:'none'}), ['assignee','completedDate','title','status']).slice(0,200)}</code><br>
+      Sample active MC task packetid: <strong>${sorted[0]?.id||'none'}</strong><br>
+      MC link for first task: <code style="font-size:11px">${sorted[0]?.mcLink||'none'}</code>
+    </div>
   </div>
 
   <div class="full-row card">
