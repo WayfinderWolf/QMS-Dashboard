@@ -802,10 +802,24 @@ function handleWFImport(file){
         }));
       }
 
-      state.wfData = {tasks, projects, importedAt:new Date().toISOString()};
+      // Merge into existing WF data rather than replacing it
+      const existingTasks    = state.wfData?.tasks    || [];
+      const existingProjects = state.wfData?.projects || [];
+
+      // Deduplicate by id — new data wins on conflict
+      const mergedTaskMap = {};
+      [...existingTasks, ...tasks].forEach(t => { mergedTaskMap[t.id||t.title] = t; });
+      const mergedProjMap = {};
+      [...existingProjects, ...projects].forEach(p => { mergedProjMap[p.id||p.name] = p; });
+
+      state.wfData = {
+        tasks:     Object.values(mergedTaskMap),
+        projects:  Object.values(mergedProjMap),
+        importedAt: new Date().toISOString(),
+      };
       snapshotHistory(); persist();
       el.style.color='var(--success)';
-      el.textContent=`✓ ${tasks.length} tasks, ${projects.length} projects from "${file.name}"`;
+      el.textContent=`✓ ${tasks.length} new + ${existingTasks.length} existing = ${state.wfData.tasks.length} total tasks`;
       document.getElementById('wf-clear')?.classList.remove('hidden');
     }catch(err){
       el.style.color='var(--danger)';
@@ -881,12 +895,20 @@ function handleMCCompletedImport(file){
 
       // Store separately from live tasks
       if(!state.mcCompletedData) state.mcCompletedData = {};
-      state.mcCompletedData = { tasks: completed, importedAt: new Date().toISOString() };
+      // Merge into existing MC completed data
+      const existingMC = state.mcCompletedData?.tasks || [];
+      const mergedMCMap = {};
+      [...existingMC, ...completed].forEach(t => { mergedMCMap[t.id||t.title] = t; });
+
+      state.mcCompletedData = {
+        tasks: Object.values(mergedMCMap),
+        importedAt: new Date().toISOString(),
+      };
       snapshotHistory();
       persist();
 
       el.style.color='var(--success)';
-      el.textContent=`✓ ${completed.length} completed tasks imported from "${file.name}"`;
+      el.textContent=`✓ ${completed.length} new + ${existingMC.length} existing = ${state.mcCompletedData.tasks.length} total`;
       document.getElementById('mc-clear')?.classList.remove('hidden');
       render();
     }catch(err){
