@@ -227,7 +227,7 @@
 
     <div class="divider"></div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:4px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
       <div>
         <div class="card-title" style="margin-bottom:6px">Workfront Tasks (.xlsx)</div>
         <div class="drop-zone" id="drop-zone-wf" onclick="document.getElementById('file-wf').click()">
@@ -254,19 +254,17 @@
           <button class="btn btn-sm hidden" id="mc-clear" onclick="clearImport('mc')" style="color:var(--danger);border-color:var(--danger);flex-shrink:0">✕ Clear</button>
         </div>
       </div>
-      <div>
-        <div class="card-title" style="margin-bottom:6px">Weekly Schedule (.xlsx)</div>
-        <div class="drop-zone" id="drop-zone-sched" onclick="document.getElementById('file-sched').click()">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-subtle)" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <div class="drop-zone-text">Drop schedule export here</div>
-          <div class="drop-zone-sub">Import Monday morning · drives KPI targets</div>
-        </div>
-        <input type="file" id="file-sched" accept=".xlsx,.xls" class="hidden" onchange="handleScheduleImport(this.files[0])">
-        <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-          <div id="sched-status" class="text-sm text-muted hidden" style="flex:1"></div>
-          <button class="btn btn-sm hidden" id="sched-clear" onclick="clearImport('sched')" style="color:var(--danger);border-color:var(--danger);flex-shrink:0">✕ Clear</button>
-        </div>
-      </div>
+    </div>
+    <div class="card-title" style="margin-bottom:6px">Weekly Schedule (.xlsx)</div>
+    <div class="drop-zone" id="drop-zone-sched" onclick="document.getElementById('file-sched').click()">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text-subtle)" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      <div class="drop-zone-text">Drop weekly schedule here</div>
+      <div class="drop-zone-sub">Import Monday morning · drives per-person KPI targets · all schedule sheets parsed automatically</div>
+    </div>
+    <input type="file" id="file-sched" accept=".xlsx,.xls" class="hidden" onchange="handleScheduleImport(this.files[0])">
+    <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+      <div id="sched-status" class="text-sm text-muted hidden" style="flex:1"></div>
+      <button class="btn btn-sm hidden" id="sched-clear" onclick="clearImport('sched')" style="color:var(--danger);border-color:var(--danger);flex-shrink:0">✕ Clear</button>
     </div>
 
     <div class="divider"></div>
