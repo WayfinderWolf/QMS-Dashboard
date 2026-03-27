@@ -569,17 +569,15 @@ function mapSoapTask(t, assignee){
   const queuedDate = normalizeDate(t.notificationdate || t.launchdate);
   const launchDate = normalizeDate(t.launchdate);
 
-  // Build a direct MC packet link — works for anyone with doc admin rights, not just assignee
-  // Use OpenFormPacket event with packetid instead of showTask (which requires task assignment)
+  // Build MC link using viewPacket — accessible to doc admins regardless of task assignment
+  // Falls back to the original showTask link from the API if packetid unavailable
   const packetId = t.packetid || t.packetId || '';
+  const rawLink  = t.link || '';
   const mcLink = packetId
-    ? `https://doterra.mastercontrol.com/doterra/main/index.cfm?event=com.mc.protocol.OpenFormPacket&packetID=${packetId}`
-    : (() => {
-        const rawLink = t.link || '';
-        return rawLink.startsWith('http') ? rawLink
-             : rawLink ? 'https://doterra.mastercontrol.com' + rawLink
-             : '';
-      })();
+    ? `https://doterra.mastercontrol.com/doterra/main/index.cfm?event=viewPacket&ID=${packetId}`
+    : rawLink.startsWith('http') ? rawLink
+    : rawLink ? 'https://doterra.mastercontrol.com' + rawLink
+    : '';
 
   return {
     id:         t.packetid || t.stepid || t.id || '',
@@ -1354,28 +1352,29 @@ function renderMember(name){
   const mc = memberColor(mi<0?0:mi);
   const pct= s.tasks.length?Math.round(s.completed/s.tasks.length*100):0;
 
-  // Build real per-member completion history from imported data
-  // Group completed tasks by week for this member
+  // Build real per-member completion history from ALL imported sources
   const memberDoneTasks = [
     ...(state.wfData?.tasks||[]).filter(t=>
-      t.status==='completed' && (normName(t.assignee)===normName(name)) && t.completedDate
+      t.status==='completed' && normName(t.assignee)===normName(name) && t.completedDate
     ),
     ...(state.mcCompletedData?.tasks||[]).filter(t=>
       normName(t.assignee)===normName(name) && t.completedDate
     ),
   ];
 
-  // Map to week buckets matching history dates
-  const memberH = state.history.map(h=>{
-    // Parse history date label back to a date range (approx)
-    const histDate = new Date(h.date + ' ' + new Date().getFullYear());
-    const weekStart = new Date(histDate); weekStart.setDate(weekStart.getDate()-6);
+  // Build a simple weekly chart from the last 13 weeks using real completedDate values
+  const now = new Date(); now.setHours(23,59,59,0);
+  const memberH = [];
+  for(let w=12; w>=0; w--){
+    const weekEnd   = new Date(now); weekEnd.setDate(weekEnd.getDate() - w*7);
+    const weekStart = new Date(weekEnd); weekStart.setDate(weekStart.getDate()-6);
+    const label = weekEnd.toLocaleDateString('en-US',{month:'short',day:'numeric'});
     const count = memberDoneTasks.filter(t=>{
       const d = new Date(t.completedDate);
-      return d >= weekStart && d <= histDate;
+      return !isNaN(d) && d >= weekStart && d <= weekEnd;
     }).length;
-    return { date: h.date, completed: count };
-  });
+    memberH.push({ date: label, completed: count });
+  }
 
   const memberCompleted = (state.mcCompletedData?.tasks||[]).filter(t=>
     normName(t.assignee)===normName(name)
