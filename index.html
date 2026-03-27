@@ -2036,10 +2036,10 @@ const DEFAULT_KPI_RULES = [
     category: 'Artwork',
     target: 60,
     hrs: 0.42,
-    source: 'WF Issue',
-    matchFn: t => t.source === 'WF Issue'
-      && /spec.*qa.*approv/i.test(t.workflow || '')
-      && /proof\s*$/i.test(t.title || ''),
+    source: 'WF Task',
+    // WF tasks: "QA: Add * Artwork to MC", "QA: Upload artwork to MC", etc.
+    matchFn: t => (t.source === 'WF Task' || t.source === 'WF Issue')
+      && /artwork.*to\s*(mc|master\s*control)|upload.*artwork|add.*artwork.*mc/i.test(t.title || ''),
   },
   {
     id: 'assembly_spec',
@@ -2048,20 +2048,22 @@ const DEFAULT_KPI_RULES = [
     target: 28,
     hrs: 1.08,
     source: 'WF Task',
-    matchFn: t => t.source === 'WF Task'
-      && /spec.*dept.*approv/i.test(t.workflow || '')
-      && /AS/i.test(t.title || ''),
+    // WF tasks: "QA: Route PK spec = AS-00029" or "QA: Route and release spec update = AS-00101"
+    // Assembly specs always have "AS-" followed by a number in the title
+    matchFn: t => (t.source === 'WF Task' || t.source === 'WF Issue')
+      && /AS-\d{5}/i.test(t.title || ''),
   },
   {
     id: 'fps_global',
-    label: 'Finished Product Specs (Global)',
+    label: 'Finished Product Specs',
     category: 'Specifications',
-    target: 32,
+    target: 36,  // 16+16+4 combined global+regional
     hrs: 1.42,
     source: 'WF Task',
+    // WF tasks: "QA: FP Spec Routed and Released", "QA: Initiate Draft FP Spec", "QA: Release Pilot FP Spec"
+    // Also: "QA: FT Spec", "PK & FT Spec Updates (FPS)"
     matchFn: t => (t.source === 'WF Task' || t.source === 'WF Issue')
-      && /spec/i.test(t.workflow || '')
-      && /FPS/i.test(t.title || ''),
+      && /FP\s*spec|finished\s*product\s*spec|FPS|initiate.*draft.*FP|FP.*routed|FT\s*spec.*created|FT\s*spec.*released/i.test(t.title || ''),
   },
   {
     id: 'change_control',
@@ -2070,8 +2072,11 @@ const DEFAULT_KPI_RULES = [
     target: 28,
     hrs: 1.75,
     source: 'MasterControl',
-    matchFn: t => t.source === 'MasterControl'
-      && /change\s*control/i.test(t.workflow || ''),
+    // MC tasks: workflow = "Change Control"
+    // WF tasks: "Route Change Control Documentation for Approval"
+    matchFn: t => (t.source === 'MasterControl' && /change\s*control/i.test(t.workflow || ''))
+      || ((t.source === 'WF Task' || t.source === 'WF Issue')
+        && /route\s*change\s*control/i.test(t.title || '')),
   },
 ];
 
@@ -2161,8 +2166,7 @@ function handleScheduleImport(file){
   const reader = new FileReader();
   reader.onload = e => {
     try{
-      const wb = XLSX.read(e.target.result, {type:'array'});
-      const assignments = [];
+            const wb = XLSX.read(e.target.result, {type:'array', cellFormula:false, cellNF:false}); const assignments = [];
 
       // Parse each sheet that looks like a schedule (has SME/Description header)
       wb.SheetNames.forEach(sheetName => {
@@ -2189,13 +2193,18 @@ function handleScheduleImport(file){
           if(taskName.startsWith('=') || taskName.startsWith('S1') || taskName.startsWith('S2')) continue;
           if(person.includes('Total') || person.includes('Spec') || person.includes('Global')) continue;
 
-          // Match task name to a KPI rule
-          const matchedRule = getKPIRules().find(r =>
-            r.id === 'mc_artwork_upload' && /proof.*artwork|artwork.*upload|upload.*regional/i.test(taskName) ||
-            r.id === 'assembly_spec'     && /assembly spec/i.test(taskName) ||
-            r.id === 'fps_global'        && /finished product spec/i.test(taskName) ||
-            r.id === 'change_control'    && /change control/i.test(taskName)
-          );
+          // Match schedule task name (from Router) to a KPI rule id
+          // Router names like "MC Artwork Upload - Regional - PG" -> mc_artwork_upload
+          // Router names like "Assembly Specification (AS) - Regional" -> assembly_spec
+          // Router names like "Finished Product Specification (FPS)" -> fps_global
+          // Router names like "Change Control - Global/Regional" -> change_control
+          let matchedRuleId = null;
+          const tn = taskName.toLowerCase();
+          if(/mc artwork upload|artwork upload/i.test(taskName))        matchedRuleId = 'mc_artwork_upload';
+          else if(/assembly spec/i.test(taskName))                      matchedRuleId = 'assembly_spec';
+          else if(/finished product spec|fps/i.test(taskName))          matchedRuleId = 'fps_global';
+          else if(/change control/i.test(taskName))                     matchedRuleId = 'change_control';
+          const matchedRule = matchedRuleId ? { id: matchedRuleId } : null;
 
           // Split shared assignments like "Jordan/Jorge"
           person.split('/').forEach(p => {
