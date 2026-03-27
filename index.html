@@ -1815,11 +1815,9 @@ function exportToCSV(rows, filename){
     headers.join(','),
     ...rows.map(r => headers.map(h => {
       const val = String(r[h]||'').replace(/"/g,'""');
-      return val.includes(',') || val.includes('"') || val.includes('
-') ? `"${val}"` : val;
+      return val.includes(',') || val.includes('"') || val.includes('\n') ? `"${val}"` : val;
     }).join(','))
-  ].join('
-');
+  ].join('\n');
   const blob = new Blob([csv], {type:'text/csv'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
