@@ -2700,40 +2700,65 @@ function resolveAuthor(authorRaw){
 async function syncInfocards(){
   if(!state.settings.mcUrl || !state.settings.mcToken) return;
 
-  // Look back 30 days by default — enough for weekly/monthly trending.
-  // Reduces batch size and keeps sync fast.
-  const lookback = new Date();
-  lookback.setDate(lookback.getDate() - 30);
-  const startDate = lookback.toISOString().slice(0,19); // YYYY-MM-DDTHH:MM:SS
+  // Fetch only the current week's IDs — keeps the call small and fast.
+  // Current week typically has 50-300 IDs vs 2600+ for 30 days.
+  // Previous weeks are stored in state.infocardData.weekCache and reused.
+  const thisWeekStart = getWeekDates(0);
+  const startStr = thisWeekStart.toISOString().slice(0,19);
 
-  let ids = [];
+  let weekIds = [];
   try{
     const res = await mcFetch(
-      `/restapi/v1/documents/search/infoCardVaultChange?startDate=${encodeURIComponent(startDate)}`
+      `/restapi/v1/documents/search/infoCardVaultChange?startDate=${encodeURIComponent(startStr)}`
     );
-    ids = Array.isArray(res) ? res : (res.items || res.results || res.ids || []);
-    _diag['infocard_vault_change_count'] = ids.length;
+    weekIds = Array.isArray(res) ? res : (res.items||res.results||res.ids||[]);
+    _diag['infocard_vault_change_count'] = weekIds.length;
   } catch(e){
     _diag['infocard_sync_error'] = e.message;
     return;
   }
 
-  if(!ids.length) return;
+  // Merge current week IDs with cached previous weeks
+  const weekCache = state.infocardData?.weekCache || {};
+  // Also fetch previous 3 weeks if not cached yet
+  for(let w=1; w<=3; w++){
+    const wkStart = getWeekDates(-w);
+    const cacheKey = weekKey(wkStart);
+    if(!weekCache[cacheKey]){
+      try{
+        const wkStr = wkStart.toISOString().slice(0,19);
+        const res = await mcFetch(
+          `/restapi/v1/documents/search/infoCardVaultChange?startDate=${encodeURIComponent(wkStr)}`
+        );
+        // We'll fetch details for this week below — mark as pending
+        const ids = Array.isArray(res) ? res : (res.items||res.results||res.ids||[]);
+        weekCache[cacheKey] = { ids, items: null }; // items=null means not yet fetched
+        _diag[`infocard_prior_week_${w}_ids`] = ids.length;
+      } catch(e){ /* skip */ }
+    }
+  }
 
-  // Reverse so newest IDs are first — we want the most recently changed docs
-  const sortedIds = [...ids].reverse();
-  _diag['infocard_ids_total'] = sortedIds.length;
+  // Collect IDs needing detail fetch: current week + any uncached prior weeks
+  const allPendingIds = [...weekIds];
+  Object.entries(weekCache).forEach(([key, wk]) => {
+    if(!wk.items) allPendingIds.push(...(wk.ids||[]));
+  });
 
-  // Fetch in batches of 25, stopping once we have 300 released infocards
-  // This avoids fetching thousands of IDs when most are Draft/Archive
+  // Deduplicate
+  const seenIds = new Set();
+  const uniqueIds = allPendingIds.filter(id => {
+    const idStr = typeof id==='string'?id:(id.infocardId||id.id||String(id));
+    if(seenIds.has(idStr)) return false;
+    seenIds.add(idStr); return true;
+  });
+  _diag['infocard_ids_total'] = uniqueIds.length;
+
   const BATCH = 25;
-  const TARGET_RELEASED = 150;  // 150 is plenty for 30-day trending
   const details = [];
   const unknownAuthors = new Set();
 
-  for(let i=0; i<sortedIds.length; i+=BATCH){
-    if(details.length >= TARGET_RELEASED) break;
-    const batch = sortedIds.slice(i, i+BATCH);
+  for(let i=0; i<uniqueIds.length; i+=BATCH){
+    const batch = uniqueIds.slice(i, i+BATCH);
     const results = await Promise.allSettled(
       batch.map(id => {
         const infocardId = typeof id === 'string' ? id : (id.infocardId || id.id || id);
@@ -2789,11 +2814,26 @@ async function syncInfocards(){
     if(!existingMap[guid]) existingMap[guid] = ''; // Blank = needs mapping
   });
 
+  // Cache current week items for future syncs
+  const currentWeekKey = weekKey(getWeekDates(0));
+  const updatedWeekCache = state.infocardData?.weekCache || {};
+  // Store this week's released items in cache
+  updatedWeekCache[currentWeekKey] = { ids: weekIds, items: details.filter(d => {
+    const d2 = new Date(d.releaseDate);
+    const ws = getWeekDates(0);
+    return d2 >= ws;
+  })};
+  // Keep only last 5 weeks in cache
+  const cacheKeys = Object.keys(updatedWeekCache).sort().reverse().slice(0,5);
+  const trimmedCache = {};
+  cacheKeys.forEach(k => trimmedCache[k] = updatedWeekCache[k]);
+
   state.infocardData = {
     items: details,
     lastSync: new Date().toISOString(),
     authorMap: existingMap,
     unknownAuthors: [...unknownAuthors],
+    weekCache: trimmedCache,
   };
 
   _diag['infocard_details_fetched'] = details.length;
