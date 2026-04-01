@@ -1828,83 +1828,46 @@ function renderKPIs(){
 
   ${!state.scheduleData ? `<div class="alert alert-info">Import this week's schedule file via Settings to see per-person KPI targets.</div>` : ''}
 
-  ${rules.map(rule => {
-    const wkActual   = countKPITasks(rule, wkStart, wkEnd);
-    const wkPct      = rule.target > 0 ? Math.round(wkActual / rule.target * 100) : 0;
-    const color      = wkPct >= 100 ? 'var(--success)' : wkPct >= 70 ? 'var(--warning)' : 'var(--danger)';
-    const history    = kpiWeeklyHistory(rule);
-    const rollActual = history.reduce((s,w) => s + w.count, 0);
-    const rollAvg    = Math.round(rollActual / 4);
-    const byPerson   = countKPIByPerson(rule, wkStart, wkEnd);
-    const assigned   = getAssignedPersons(rule);
-
-    // Build per-person rows — show assigned people + anyone with actuals
-    const people = [...new Set([...assigned, ...Object.keys(byPerson)])];
-
-    return `
-    <div class="full-row card" style="margin-bottom:14px">
-      <div class="card-header">
-        <div>
-          <div class="card-title">${rule.label}</div>
-          <div class="card-subtitle">${rule.category} · Target: ${rule.target}/wk · ${rule.hrs}h per task</div>
-        </div>
-        <div style="text-align:right">
-          <div style="font-size:24px;font-weight:600;color:${color}">${wkActual} <span style="font-size:14px;color:var(--text-muted)">/ ${rule.target}</span></div>
-          <div style="font-size:11px;color:var(--text-subtle)">${wkPct}% of target</div>
-        </div>
-      </div>
-
-      <div style="height:6px;background:var(--surface2);border-radius:3px;overflow:hidden;margin-bottom:14px">
-        <div style="height:100%;width:${Math.min(wkPct,100)}%;background:${color};border-radius:3px;transition:width .5s"></div>
-      </div>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-        <div>
-          <div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-subtle);margin-bottom:8px">Per Person — This Week</div>
-          ${people.length === 0 ? `<div class="text-sm text-muted">No completions recorded this week</div>` :
-            `<table class="data-table">
-              <thead><tr><th>Person</th><th>Actual</th><th>Assigned</th><th>Status</th></tr></thead>
-              <tbody>
-              ${people.map(person => {
-                const actual  = byPerson[person] || 0;
-                const isAssigned = assigned.includes(person) || assigned.some(a => normName(a) === normName(person));
-                // Per-person target = team target / number of assigned people
-                const perPersonTarget = assigned.length > 0 ? Math.round(rule.target / assigned.length) : rule.target;
-                const pPct = perPersonTarget > 0 ? Math.round(actual / perPersonTarget * 100) : 0;
-                const pColor = pPct >= 100 ? 'var(--success)' : pPct >= 70 ? 'var(--warning)' : 'var(--danger)';
-                return `<tr>
-                  <td>${person}</td>
-                  <td style="font-weight:500;color:${pColor}">${actual}</td>
-                  <td>${isAssigned ? `<span class="badge badge-accent">Assigned</span>` : '<span class="badge badge-neutral">Other</span>'}</td>
-                  <td style="font-size:11px;color:${pColor}">${isAssigned ? pPct+'%' : '—'}</td>
-                </tr>`;
-              }).join('')}
-              </tbody>
-            </table>`
-          }
-        </div>
-        <div>
-          <div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-subtle);margin-bottom:8px">4-Week History</div>
-          <div style="display:flex;align-items:flex-end;gap:6px;height:80px">
-            ${history.map(w => {
-              const barPct = rule.target > 0 ? Math.min(w.count / rule.target * 100, 130) : 0;
-              const barColor = w.count >= rule.target ? 'var(--success)' : w.count >= rule.target * .7 ? 'var(--warning)' : 'var(--danger)';
-              return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px">
-                <div style="font-size:10px;color:var(--text-muted)">${w.count}</div>
-                <div style="width:100%;background:${barColor};border-radius:3px 3px 0 0;height:${Math.max(barPct,3)}%;min-height:3px;max-height:60px"></div>
-                <div style="font-size:9px;color:var(--text-subtle);text-align:center">${w.label}</div>
-              </div>`;
-            }).join('')}
-          </div>
-          <div style="margin-top:8px;font-size:11px;color:var(--text-subtle)">
-            4-wk avg: <strong style="color:var(--text)">${rollAvg}</strong>/wk ·
-            Total: <strong style="color:var(--text)">${rollActual}</strong> ·
-            Est. hours: <strong style="color:var(--text)">${(rollActual * rule.hrs).toFixed(1)}h</strong>
-          </div>
-        </div>
-      </div>
-    </div>`;
-  }).join('')}`;
+  <!-- Granular breakdown table — all Router task types -->
+  <div class="full-row card">
+    <div class="card-header">
+      <div><div class="card-title">Task Type Breakdown</div>
+      <div class="card-subtitle">All Router task types · this week vs target · per person</div></div>
+    </div>
+    <table class="data-table">
+      <thead><tr>
+        <th>Task Type</th><th>Role</th>
+        <th style="text-align:right">Target/wk</th>
+        <th style="text-align:right">This Week</th>
+        <th style="text-align:right">4-wk Avg</th>
+        <th>By Person This Week</th>
+        <th>Source</th>
+      </tr></thead>
+      <tbody>
+        ${GRANULAR_KPI_RULES.map(rule => {
+          const actual   = countGranularKPI(rule, wkStart, wkEnd);
+          const r4       = rollingWeeksRange(4);
+          const rollAct  = countGranularKPI(rule, r4.start, r4.end);
+          const rollAvg  = (rollAct/4).toFixed(1);
+          const pct      = rule.target>0 ? Math.round(actual/rule.target*100) : 0;
+          const color    = pct>=100?'var(--success)':pct>=70?'var(--warning)':actual>0?'var(--text-muted)':'var(--danger)';
+          const byPerson = countGranularKPIByPerson(rule, wkStart, wkEnd);
+          const people   = Object.entries(byPerson).sort((a,b)=>b[1]-a[1]);
+          const src      = rule.noAuthor ? 'MC (no author)' : rule.infocardMatch&&rule.wfMatch ? 'MC+WF' : rule.infocardMatch ? 'MC' : rule.wfMatch ? 'WF' : '—';
+          return '<tr>'
+            +'<td><div style="font-size:12px;font-weight:500">'+rule.label+'</div>'+(rule.noAuthor?'<div class="text-xs text-subtle">Author not tracked</div>':'')+'</td>'
+            +'<td class="text-xs text-muted">'+rule.role+'</td>'
+            +'<td style="text-align:right;font-size:12px">'+rule.target+'</td>'
+            +'<td style="text-align:right"><span style="font-size:14px;font-weight:600;color:'+color+'">'+actual+'</span>'
+              +' <span style="font-size:10px;color:var(--text-subtle)">'+pct+'%</span></td>'
+            +'<td style="text-align:right;font-size:12px;color:var(--text-muted)">'+rollAvg+'</td>'
+            +'<td style="font-size:11px">'+(people.length===0?'<span class="text-subtle">—</span>':people.map(([n,c])=>'<span style="margin-right:6px">'+n.split(' ')[0]+' <strong>'+c+'</strong></span>').join(''))+'</td>'
+            +'<td><span style="font-size:10px;color:var(--text-subtle)">'+src+'</span></td>'
+            +'</tr>';
+        }).join('')}
+      </tbody>
+    </table>
+  </div>\`;
 }
 
 // ── SCHEDULE PAGE ──
@@ -2123,19 +2086,47 @@ function renderMemberInfocards(name){
         </div>`;
       }).join('')}
     </div>
-    <table class="data-table">
-      <thead><tr><th>Document</th><th>Category</th><th>Released</th></tr></thead>
-      <tbody>
-        ${items.sort((a,b)=>new Date(b.releaseDate)-new Date(a.releaseDate)).slice(0,6).map(i=>`<tr>
-          <td><span class="font-medium" style="font-size:12px">${i.title||i.number||'—'}</span>
-            ${i.subtype?`<div class="text-xs text-subtle">${i.subtype}</div>`:''}
-          </td>
-          <td><span class="badge badge-accent" style="font-size:10px">${i.category}</span></td>
-          <td style="font-size:12px;color:var(--text-muted)">${formatDate(i.releaseDate)}</td>
-        </tr>`).join('')}
-        ${items.length>6?`<tr><td colspan="3" style="text-align:center;font-size:11px;color:var(--text-subtle)">+${items.length-6} more — <span style="cursor:pointer;color:var(--accent)" onclick="showView('infocards')">view all</span></td></tr>`:''}
-      </tbody>
-    </table>`}
+    <!-- Granular KPI breakdown for this person -->
+    <div style="margin-top:10px">
+      <div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-subtle);margin-bottom:6px">Completions by Task Type — This Week</div>
+      <table class="data-table">
+        <thead><tr><th>Task Type</th><th style="text-align:right">This Week</th><th style="text-align:right">4-wk Avg</th><th>Source</th></tr></thead>
+        <tbody>
+          ${GRANULAR_KPI_RULES.map(rule => {
+            const { start: ws, end: we } = thisWeekRange();
+            const r4 = rollingWeeksRange(4);
+            const wkByP  = countGranularKPIByPerson(rule, ws, we);
+            const r4ByP  = countGranularKPIByPerson(rule, r4.start, r4.end);
+            const wkAct  = wkByP[name] || Object.entries(wkByP).filter(([n])=>normName(n)===normName(name)).reduce((s,[,c])=>s+c,0);
+            const r4Act  = r4ByP[name] || Object.entries(r4ByP).filter(([n])=>normName(n)===normName(name)).reduce((s,[,c])=>s+c,0);
+            if(wkAct===0 && r4Act===0) return '';
+            const src = rule.noAuthor?'MC (no author)':rule.infocardMatch&&rule.wfMatch?'MC+WF':rule.infocardMatch?'MC':'WF';
+            return '<tr>'
+              +'<td style="font-size:12px">'+rule.label+'</td>'
+              +'<td style="text-align:right;font-weight:600;color:var(--accent)">'+wkAct+'</td>'
+              +'<td style="text-align:right;font-size:11px;color:var(--text-muted)">'+(r4Act/4).toFixed(1)+'</td>'
+              +'<td style="font-size:10px;color:var(--text-subtle)">'+src+'</td>'
+              +'</tr>';
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Recent releases -->
+    <div style="margin-top:10px">
+      <div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-subtle);margin-bottom:6px">Recent Releases</div>
+      <table class="data-table">
+        <thead><tr><th>Document</th><th>Subtype</th><th>Released</th></tr></thead>
+        <tbody>
+          ${items.sort((a,b)=>new Date(b.releaseDate)-new Date(a.releaseDate)).slice(0,5).map(i=>'<tr>'
+            +'<td><span style="font-size:12px;font-weight:500">'+(i.title||i.number||'—')+'</span></td>'
+            +'<td class="text-xs text-muted">'+(i.subtype||'—')+'</td>'
+            +'<td style="font-size:12px;color:var(--text-muted)">'+formatDate(i.releaseDate)+'</td>'
+            +'</tr>').join('')}
+          ${items.length>5?'<tr><td colspan="3" style="text-align:center;font-size:11px;color:var(--text-subtle)">+'+(items.length-5)+' more</td></tr>':''}
+        </tbody>
+      </table>
+    </div>`}
   </div>`;
 }
 
@@ -2938,6 +2929,84 @@ const ROUTER_TASKS = [
   {id:'iaud', name:'Internal Audit',                                             qty:5,   hrs:0.75, role:'Specialist III - Regional'},
   {id:'audr', name:'Audit Prep Regional',                                        qty:2,   hrs:0.50, role:'Specialist III - Regional'},
 ];
+
+// ─────────────────────────────────────────────
+// GRANULAR KPI RULES
+// One per Router task type — same granularity as the schedule.
+// Each maps to an infocard subtype match and/or a WF task match.
+// ─────────────────────────────────────────────
+const GRANULAR_KPI_RULES = [
+  // Specialist I — Global
+  { id:'g_ots',  label:'Oil Testing Specification (OTS)',               role:'Spec I — Global',          target:4,    hrs:1.75, infocardMatch:/^Oil Testing Spec/i,          wfMatch:null },
+  { id:'g_bs',   label:'Bulk Specification (BS)',                       role:'Spec I — Global',          target:1,    hrs:1.08, infocardMatch:/^Bulk Spec/i,                 wfMatch:null },
+  { id:'g_ofr',  label:'Oil Formula Review',                            role:'Spec I — Global',          target:2,    hrs:0.25, infocardMatch:null,                          wfMatch:t=>/oil.*formula.*review/i.test(t.title||'') },
+  { id:'g_sfr',  label:'Supplement Formula Review',                     role:'Spec I — Global',          target:3,    hrs:0.42, infocardMatch:null,                          wfMatch:t=>/supplement.*formula.*review/i.test(t.title||'') },
+  { id:'g_cfr',  label:'Cosmetic Formula Review',                       role:'Spec I — Global',          target:4,    hrs:0.33, infocardMatch:null,                          wfMatch:t=>/cosmetic.*formula.*review/i.test(t.title||'') },
+  { id:'g_adr',  label:'Allergen Declaration Review',                   role:'Spec I — Global',          target:4,    hrs:0.33, infocardMatch:/^(Oil )?Allergen Declaration/i, wfMatch:null, noAuthor:true },
+  { id:'g_pbs',  label:'Packaging BOM Specification (PBS)',             role:'Spec I — Global',          target:1,    hrs:1.08, infocardMatch:/^Packaging BOM Spec/i,        wfMatch:null },
+  { id:'g_cs',   label:'Component Specification (CS)',                  role:'Spec I — Global',          target:1,    hrs:1.08, infocardMatch:/^Component Spec/i,            wfMatch:null },
+  { id:'g_fmm',  label:'Foreign Market Managed Spec (FMM)',             role:'Spec I — Global',          target:2,    hrs:1.92, infocardMatch:/^Foreign Market Managed/i,    wfMatch:null },
+  // Specialist I — Regional
+  { id:'r_ing',  label:'Ingredient Specification (ING)',                role:'Spec I — Regional',        target:1,    hrs:1.00, infocardMatch:/^Ingredient Spec/i,           wfMatch:null },
+  { id:'r_as',   label:'Assembly Specification (AS)',                   role:'Spec I — Regional',        target:28,   hrs:1.08, infocardMatch:/^Assembly Spec/i,             wfMatch:t=>/\bAS-\d{5}/i.test(t.title||'') },
+  { id:'fps',    label:'Finished Product Specification (FPS)',          role:'Spec I — Global/Regional', target:36,   hrs:1.42, infocardMatch:/^Finished Product Spec/i,     wfMatch:t=>/\bFP\s*spec|\bFPS\b|initiate.*draft.*FP|FP.*routed|FT\s*spec/i.test(t.title||'') },
+  { id:'r_art5', label:'Artwork Approval (ART)',                        role:'Spec I — Regional',        target:6,    hrs:0.33, infocardMatch:/^Artwork Approval/i,          wfMatch:null },
+  { id:'r_mcu',  label:'MC Artwork Upload (PG + LFC)',                  role:'Spec I — Regional',        target:60,   hrs:0.42, infocardMatch:/^Artwork Proof/i,             wfMatch:t=>/artwork.*to\s*(mc|master\s*control)|upload.*artwork|add.*artwork.*mc/i.test(t.title||'') },
+  // Specialist II — combined Global + Regional
+  { id:'man',    label:'Manuals / Policies / Plans / Job Descriptions', role:'Spec II',                  target:4,    hrs:3.50, infocardMatch:/^(Manual|Polic|Plan|Job Desc)/i, wfMatch:null },
+  { id:'sop',    label:'SOP / Work Instructions',                       role:'Spec II',                  target:5,    hrs:3.25, infocardMatch:/^(SOP|Work Instruction)/i,    wfMatch:null },
+  { id:'frm',    label:'Forms',                                         role:'Spec II',                  target:5,    hrs:2.50, infocardMatch:/^Form/i,                      wfMatch:null },
+  // Specialist III — combined Global + Regional
+  { id:'cc',     label:'Change Control',                                role:'Spec III',                 target:28,   hrs:1.75, infocardMatch:/^Change Control/i,            wfMatch:t=>/route\s*change\s*control/i.test(t.title||'') },
+  { id:'capa',   label:'CAPA',                                          role:'Spec III',                 target:0.25, hrs:2.00, infocardMatch:/^CAPA/i,                      wfMatch:null },
+];
+
+function countGranularKPI(rule, startDate, endDate){
+  let count = 0;
+  if(rule.infocardMatch && !rule.noAuthor){
+    count += (state.infocardData?.items||[]).filter(i=>{
+      if(!i.tracked||!i.releaseDate) return false;
+      const d=new Date(i.releaseDate);
+      if(d<startDate||d>endDate) return false;
+      return rule.infocardMatch.test(i.subtype||'');
+    }).length;
+  }
+  if(rule.wfMatch){
+    count += [...(state.wfData?.tasks||[]),...(state.mcCompletedData?.tasks||[])].filter(t=>{
+      if(t.status!=='completed') return false;
+      const d=new Date(t.completedDate||t.queuedDate||0);
+      if(d<startDate||d>endDate) return false;
+      return rule.wfMatch(t);
+    }).length;
+  }
+  return count;
+}
+
+function countGranularKPIByPerson(rule, startDate, endDate){
+  const byPerson={};
+  if(rule.infocardMatch && !rule.noAuthor){
+    (state.infocardData?.items||[]).forEach(i=>{
+      if(!i.tracked||!i.releaseDate) return;
+      const d=new Date(i.releaseDate);
+      if(d<startDate||d>endDate) return;
+      if(!rule.infocardMatch.test(i.subtype||'')) return;
+      const name=i.author||'Unknown';
+      byPerson[name]=(byPerson[name]||0)+1;
+    });
+  }
+  if(rule.wfMatch){
+    [...(state.wfData?.tasks||[]),...(state.mcCompletedData?.tasks||[])].forEach(t=>{
+      if(t.status!=='completed') return;
+      const d=new Date(t.completedDate||t.queuedDate||0);
+      if(d<startDate||d>endDate) return;
+      if(!rule.wfMatch(t)) return;
+      const name=t.assignee||'Unassigned';
+      byPerson[name]=(byPerson[name]||0)+1;
+    });
+  }
+  return byPerson;
+}
+
 
 // Get ISO week key for a date: 'YYYY-WW'
 // Convert a date to an ISO week key ('YYYY-WW') used as the schedule storage key.
