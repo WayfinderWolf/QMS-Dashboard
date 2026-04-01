@@ -769,7 +769,7 @@ async function syncMasterControl(){
 
   // 15-second timeout guard
   const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('Sync timed out after 15s — check Worker URL and token')), 15000)
+    setTimeout(() => reject(new Error('Sync timed out after 45s — check Worker URL and token')), 45000)
   );
 
   try{
@@ -824,8 +824,9 @@ async function doSync(){
     wfTasks:   [],
   };
 
-  // Sync released infocards in parallel with task data
-  await syncInfocards();
+  // Sync released infocards — non-blocking so a failure doesn't kill the task sync
+  try{ await syncInfocards(); }
+  catch(e){ _diag['infocard_sync_error'] = e.message; }
 
   state.lastSync = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
   snapshotHistory();
@@ -2685,10 +2686,10 @@ function resolveAuthor(authorRaw){
 async function syncInfocards(){
   if(!state.settings.mcUrl || !state.settings.mcToken) return;
 
-  // Look back 90 days to get enough history for trend charts
-  // On subsequent syncs this could be shortened — but 90 days is safe
+  // Look back 30 days by default — enough for weekly/monthly trending.
+  // Reduces batch size and keeps sync fast.
   const lookback = new Date();
-  lookback.setDate(lookback.getDate() - 90);
+  lookback.setDate(lookback.getDate() - 30);
   const startDate = lookback.toISOString().slice(0,19); // YYYY-MM-DDTHH:MM:SS
 
   let ids = [];
