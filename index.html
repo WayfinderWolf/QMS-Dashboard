@@ -2842,6 +2842,15 @@ async function syncInfocards(){
         if(authorRaw && !state.settings.members.some(m => normName(m) === normName(authorName))){
           unknownAuthors.add(authorRaw); // Track GUIDs we couldn't resolve
         }
+        const releaseDateNorm = normalizeDate(d.releaseDate);
+
+        // Only keep infocards released within our 4-week tracking window.
+        // The vault change endpoint returns IDs that changed vaults — this includes
+        // old documents that were reorganized or moved, not just newly released ones.
+        // Filtering by releaseDate ensures we only show recently completed work.
+        const fourWeeksAgo = new Date(); fourWeeksAgo.setDate(fourWeeksAgo.getDate()-28);
+        if(releaseDateNorm && new Date(releaseDateNorm) < fourWeeksAgo) return;
+
         details.push({
           id:           d.infocardId || d.id || '',
           number:       d.infocardNumber || '',
@@ -2852,7 +2861,7 @@ async function syncInfocards(){
           tracked,
           authorRaw,
           author:       authorName,
-          releaseDate:  normalizeDate(d.releaseDate),
+          releaseDate:  releaseDateNorm,
           createDate:   normalizeDate(d.createDate),
           lifecycleStatus: d.lifecycleStatus || '',
           source:       'MasterControl',
