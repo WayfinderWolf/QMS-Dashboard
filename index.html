@@ -190,6 +190,10 @@
       <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="1.5"/><line x1="5" y1="1" x2="5" y2="5"/><line x1="11" y1="1" x2="11" y2="5"/><line x1="2" y1="7" x2="14" y2="7"/></svg>
       Schedule
     </div>
+    <div class="nav-item" onclick="showView('infocards')" id="nav-infocards">
+      <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="1" width="12" height="14" rx="1.5"/><line x1="5" y1="5" x2="11" y2="5"/><line x1="5" y1="8" x2="11" y2="8"/><line x1="5" y1="11" x2="8" y2="11"/></svg>
+      Infocards
+    </div>
     <div class="sidebar-section">Filters</div>
     <div id="sidebar-filters" style="padding:0 8px 8px"></div>
 
@@ -276,6 +280,23 @@
     <div class="card-title" style="margin-bottom:6px">Team Members</div>
     <div class="form-hint" style="margin-bottom:8px">Display names shown in the dashboard — comma-separated.</div>
     <textarea class="form-input" id="team-members" rows="2" placeholder="Casey R., Jordan L., Priya M., Sam T."></textarea>
+
+    <div style="margin-top:12px">
+      <div class="form-label">MC Author GUID Mapping</div>
+      <div class="form-hint" style="margin-bottom:6px">
+        Map MC author GUIDs to display names for released infocard tracking.
+        Format: <code style="font-size:11px;background:var(--surface2);padding:1px 4px;border-radius:3px">GUID=Display Name</code> one per line.
+        After first sync, unknown GUIDs appear in the Debug panel.
+      </div>
+      <textarea class="form-input" id="author-guid-map" rows="5"
+        placeholder="OEYN34XBDRFSJGRHMS=Casey Wolf&#10;ABC123DEF456=Jordan Kartchner"></textarea>
+      ${state.infocardData?.unknownAuthors?.length ? `
+      <div style="margin-top:6px;padding:8px 10px;background:var(--warning-bg);border-radius:var(--radius-sm);font-size:11px;color:var(--warning)">
+        ⚠ ${state.infocardData.unknownAuthors.length} unmapped author GUID(s) found after last sync —
+        add them above to see names on the Infocards page.<br>
+        <span style="font-family:monospace;font-size:10px">${state.infocardData.unknownAuthors.join(', ')}</span>
+      </div>` : ''}
+    </div>
 
     <div style="margin-top:12px">
       <div class="form-label">MC Usernames</div>
@@ -394,6 +415,7 @@ let state = {
   kpiRules: null,
   scheduleData: null,   // legacy import — replaced by built-in schedule
   schedule: {},         // { 'YYYY-WW': { ptoNote, tasks:[{taskId, assignee, qty, notes}] } }
+  infocardData: null,   // { items:[], lastSync, authorMap:{guid:displayName} }
   teamFilter:{ source:[], workflow:[], wfSource:[] },
 };
 
@@ -801,6 +823,9 @@ async function doSync(){
     docTasks:  allTasks,
     wfTasks:   [],
   };
+
+  // Sync released infocards in parallel with task data
+  await syncInfocards();
 
   state.lastSync = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
   snapshotHistory();
@@ -1307,7 +1332,8 @@ function render(){
                : v==='trends' ? renderTrends()
                : v==='tasks'  ? renderAllTasks()
                : v==='kpis'      ? renderKPIs()
-               : v==='schedule'  ? renderSchedule()
+               : v==='schedule'   ? renderSchedule()
+               : v==='infocards'  ? renderInfocards()
                : v==='member' ? renderMember(state.selectedMember)
                : '';
   setTimeout(attachCharts,60);
@@ -1939,6 +1965,192 @@ function renderMemberSchedule(name){
   </div>`;
 }
 
+// ── INFOCARDS PAGE ──
+// Shows released infocards from MC grouped by category, with per-author breakdown.
+// Data comes from syncInfocards() which runs alongside the task sync.
+function renderInfocards(){
+  const items = state.infocardData?.items || [];
+  const { start: wkStart, end: wkEnd } = thisWeekRange();
+  const roll4 = rollingWeeksRange(4);
+  const categories = Object.keys(INFOCARD_SUBTYPES);
+
+  if(!state.infocardData){
+    return `
+    <div class="page-header">
+      <div><div class="page-title">Released Infocards</div>
+      <div class="page-subtitle">Tracks released documents by author and subtype</div></div>
+    </div>
+    <div class="alert alert-info">No infocard data yet — sync MasterControl to load released infocards.</div>`;
+  }
+
+  const unknownGuids = (state.infocardData.unknownAuthors || []).filter(g => !state.infocardData.authorMap[g]);
+
+  return `
+  <div class="page-header">
+    <div><div class="page-title">Released Infocards</div>
+    <div class="page-subtitle">Last 90 days · ${items.length} infocards · synced ${state.lastSync||'—'}</div></div>
+    <div class="header-actions">
+      <button class="btn btn-sm" onclick="exportInfocards()">↓ Export CSV</button>
+    </div>
+  </div>
+
+  ${unknownGuids.length ? `
+  <div class="alert alert-warn">
+    ${unknownGuids.length} unmapped author GUID(s): <code style="font-size:11px">${unknownGuids.join(', ')}</code>
+    — add them in <button class="btn btn-sm" onclick="openSettings()">Settings → Author GUID Mapping</button>
+  </div>` : ''}
+
+  <!-- Summary KPI cards -->
+  <div class="kpi-grid" style="grid-template-columns:repeat(${categories.length+1},1fr);margin-bottom:18px">
+    <div class="kpi-card">
+      <div class="kpi-label">Total Released</div>
+      <div class="kpi-value" style="color:var(--success)">${items.length}</div>
+      <div class="kpi-delta neutral">last 90 days</div>
+    </div>
+    ${categories.map(cat => {
+      const catItems = items.filter(i=>i.category===cat);
+      const thisWk   = catItems.filter(i=>new Date(i.releaseDate)>=wkStart&&new Date(i.releaseDate)<=wkEnd).length;
+      return `<div class="kpi-card">
+        <div class="kpi-label">${cat}</div>
+        <div class="kpi-value" style="color:var(--accent)">${catItems.length}</div>
+        <div class="kpi-delta neutral">${thisWk} this week</div>
+      </div>`;
+    }).join('')}
+  </div>
+
+  <!-- Per-category breakdown -->
+  ${categories.map(cat => {
+    const catItems = items.filter(i=>i.category===cat)
+      .sort((a,b)=>new Date(b.releaseDate)-new Date(a.releaseDate));
+    if(!catItems.length) return `
+    <div class="full-row card" style="margin-bottom:14px">
+      <div class="card-header"><div class="card-title">${cat}</div></div>
+      <div class="text-sm text-muted">No released infocards in this category.</div>
+    </div>`;
+
+    // Per-author counts
+    const byAuthor = {};
+    catItems.forEach(i=>{
+      const a = i.author || 'Unknown';
+      byAuthor[a] = (byAuthor[a]||0)+1;
+    });
+
+    return `
+    <div class="full-row card" style="margin-bottom:14px">
+      <div class="card-header">
+        <div><div class="card-title">${cat}</div>
+        <div class="card-subtitle">${catItems.length} released in last 90 days</div></div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+        <!-- Author breakdown -->
+        <div>
+          <div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-subtle);margin-bottom:8px">By Author</div>
+          <table class="data-table">
+            <thead><tr><th>Author</th><th style="text-align:right">Count</th><th style="text-align:right">This Week</th></tr></thead>
+            <tbody>
+              ${Object.entries(byAuthor).sort((a,b)=>b[1]-a[1]).map(([author,count])=>{
+                const wkCount = catItems.filter(i=>
+                  normName(i.author)===normName(author) &&
+                  new Date(i.releaseDate)>=wkStart && new Date(i.releaseDate)<=wkEnd
+                ).length;
+                const isMember = state.settings.members.some(m=>normName(m)===normName(author));
+                return `<tr>
+                  <td>
+                    ${author}
+                    ${!isMember&&author!=='Unknown'?'<span class="badge badge-neutral" style="font-size:9px;margin-left:4px">external</span>':''}
+                  </td>
+                  <td style="text-align:right;font-weight:500">${count}</td>
+                  <td style="text-align:right;color:var(--text-muted)">${wkCount||'—'}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Recent releases -->
+        <div>
+          <div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-subtle);margin-bottom:8px">Recent Releases</div>
+          <table class="data-table">
+            <thead><tr><th>Document</th><th>Author</th><th>Released</th></tr></thead>
+            <tbody>
+              ${catItems.slice(0,8).map(i=>`<tr>
+                <td>
+                  <div class="font-medium" style="font-size:12px">${i.title||i.number||'—'}</div>
+                  ${i.subtype?`<div class="text-xs text-subtle">${i.subtype}</div>`:''}
+                </td>
+                <td style="font-size:12px">${i.author||'—'}</td>
+                <td style="font-size:12px;color:var(--text-muted)">${formatDate(i.releaseDate)}</td>
+              </tr>`).join('')}
+              ${catItems.length>8?`<tr><td colspan="3" style="text-align:center;font-size:11px;color:var(--text-subtle)">+${catItems.length-8} more</td></tr>`:''}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+  }).join('')}`;
+}
+
+// ── MEMBER INFOCARD CARD (shown on individual member pages) ──
+function renderMemberInfocards(name){
+  const items = getInfocardsByAuthor(name);
+  if(!items.length && !state.infocardData) return '';
+
+  const { start, end } = thisWeekRange();
+  const thisWk = items.filter(i=>new Date(i.releaseDate)>=start&&new Date(i.releaseDate)<=end);
+  const categories = Object.keys(INFOCARD_SUBTYPES);
+
+  return `
+  <div class="full-row card" style="margin-bottom:14px">
+    <div class="card-header">
+      <div><div class="card-title">Released Infocards</div>
+      <div class="card-subtitle">Last 90 days · ${items.length} total · ${thisWk.length} this week</div></div>
+      <button class="btn btn-sm" onclick="showView('infocards')">Full view →</button>
+    </div>
+    ${!items.length ? `<div class="text-sm text-muted">No released infocards found for this author in the last 90 days.</div>` : `
+    <div style="display:grid;grid-template-columns:repeat(${categories.length},1fr);gap:10px;margin-bottom:12px">
+      ${categories.map(cat=>{
+        const n = items.filter(i=>i.category===cat).length;
+        const wk = thisWk.filter(i=>i.category===cat).length;
+        return `<div style="padding:10px;background:var(--surface2);border-radius:var(--radius-sm)">
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--text-subtle);margin-bottom:4px">${cat}</div>
+          <div style="font-size:20px;font-weight:600;color:var(--accent)">${n}</div>
+          <div style="font-size:11px;color:var(--text-subtle)">${wk} this week</div>
+        </div>`;
+      }).join('')}
+    </div>
+    <table class="data-table">
+      <thead><tr><th>Document</th><th>Category</th><th>Released</th></tr></thead>
+      <tbody>
+        ${items.sort((a,b)=>new Date(b.releaseDate)-new Date(a.releaseDate)).slice(0,6).map(i=>`<tr>
+          <td><span class="font-medium" style="font-size:12px">${i.title||i.number||'—'}</span>
+            ${i.subtype?`<div class="text-xs text-subtle">${i.subtype}</div>`:''}
+          </td>
+          <td><span class="badge badge-accent" style="font-size:10px">${i.category}</span></td>
+          <td style="font-size:12px;color:var(--text-muted)">${formatDate(i.releaseDate)}</td>
+        </tr>`).join('')}
+        ${items.length>6?`<tr><td colspan="3" style="text-align:center;font-size:11px;color:var(--text-subtle)">+${items.length-6} more — <span style="cursor:pointer;color:var(--accent)" onclick="showView('infocards')">view all</span></td></tr>`:''}
+      </tbody>
+    </table>`}
+  </div>`;
+}
+
+function exportInfocards(){
+  const items = (state.infocardData?.items||[])
+    .sort((a,b)=>new Date(b.releaseDate)-new Date(a.releaseDate));
+  const now = new Date().toISOString().split('T')[0];
+  exportToCSV(items.map(i=>({
+    'Infocard Number': i.number,
+    Title: i.title,
+    Category: i.category,
+    Subtype: i.subtype,
+    Author: i.author,
+    'Author GUID': i.authorRaw,
+    'Release Date': i.releaseDate,
+    'Create Date': i.createDate,
+  })), `infocards-${now}.csv`);
+}
+
 function renderSchedule(){
   // Build 4 weeks: current + 3 ahead
   const weeks = [0,1,2,3].map(i => {
@@ -2192,6 +2404,7 @@ function renderMember(name){
   </div>
 
   ${renderMemberSchedule(name)}
+  ${renderMemberInfocards(name)}
 
   <div class="full-row card">
     <div class="card-header">
@@ -2380,6 +2593,10 @@ function openSettings(){
   setTimeout(refreshImportStatus, 50);
   const unMap = state.settings.mcUsernames || {};
   document.getElementById('mc-usernames').value = Object.entries(unMap).map(([k,v])=>k+'='+v).join('\n');
+  // Populate GUID map
+  const guidMap = state.infocardData?.authorMap || {};
+  const guidEl = document.getElementById('author-guid-map');
+  if(guidEl) guidEl.value = Object.entries(guidMap).map(([k,v])=>k+'='+v).join('\n');
 }
 function closeSettings(){ document.getElementById('settings-modal').classList.add('hidden'); }
 function saveSettings(){
@@ -2388,6 +2605,19 @@ function saveSettings(){
   state.settings.mcInterval= parseInt(document.getElementById('mc-interval').value)||15;
   const raw = document.getElementById('team-members').value;
   state.settings.members  = raw.split(',').map(s=>s.trim()).filter(Boolean);
+  // Parse author GUID mappings for infocard author resolution
+  const guidRaw = document.getElementById('author-guid-map')?.value || '';
+  const authorMap = state.infocardData?.authorMap || {};
+  guidRaw.split('\n').forEach(line => {
+    const eq = line.indexOf('=');
+    if(eq > 0){
+      const guid = line.slice(0,eq).trim();
+      const name = line.slice(eq+1).trim();
+      if(guid && name) authorMap[guid] = name;
+    }
+  });
+  if(state.infocardData) state.infocardData.authorMap = authorMap;
+  else state.infocardData = { items:[], authorMap, unknownAuthors:[] };
   // Parse MC username mappings
   const unRaw = document.getElementById('mc-usernames').value;
   state.settings.mcUsernames = {};
@@ -2404,6 +2634,156 @@ document.getElementById('settings-modal').addEventListener('click',e=>{
   if(e.target===document.getElementById('settings-modal')) closeSettings();
 });
 
+
+// ─────────────────────────────────────────────
+// INFOCARD SYNC
+// Pulls released infocards via two REST calls:
+//   1. GET /restapi/v1/documents/search/infoCardVaultChange?startDate=...
+//      Returns IDs of infocards that changed vaults (were released) since startDate
+//   2. GET /v1/document/{infocardId}  (parallel, one per ID)
+//      Returns author, infocardTypeName (subtype), releaseDate, createDate, title
+// Author field may be a GUID — use state.infocardData.authorMap to resolve to names.
+// Subtypes are filtered to: Artwork/Spec, SOP/Work Instructions, Change Control docs.
+// ─────────────────────────────────────────────
+
+// Subtype keywords that map to our three tracked categories
+const INFOCARD_SUBTYPES = {
+  'Artwork/Specification': [
+    /artwork/i, /specification/i, /spec/i, /artwork approval/i,
+    /assembly/i, /finished product/i, /fps/i, /packaging/i, /component/i,
+    /ingredient/i, /bulk/i, /formula/i, /testing/i,
+  ],
+  'SOP/Work Instructions': [
+    /sop/i, /work instruction/i, /standard operating/i, /policy/i,
+    /procedure/i, /manual/i, /plan/i, /form/i,
+  ],
+  'Change Control': [
+    /change control/i, /deviation/i, /capa/i, /nonconformance/i, /nc/i,
+  ],
+};
+
+function classifyInfocardSubtype(typeName){
+  if(!typeName) return null;
+  for(const [category, patterns] of Object.entries(INFOCARD_SUBTYPES)){
+    if(patterns.some(p => p.test(typeName))) return category;
+  }
+  return null; // not in a tracked category — skip
+}
+
+function resolveAuthor(authorRaw){
+  if(!authorRaw) return null;
+  const map = state.infocardData?.authorMap || {};
+  // Check GUID map first
+  if(map[authorRaw]) return map[authorRaw];
+  // If it looks like a display name already, try normName match against team members
+  const matched = state.settings.members.find(m => normName(m) === normName(authorRaw));
+  if(matched) return matched;
+  // Return raw value — user can map it in Settings
+  return authorRaw;
+}
+
+async function syncInfocards(){
+  if(!state.settings.mcUrl || !state.settings.mcToken) return;
+
+  // Look back 90 days to get enough history for trend charts
+  // On subsequent syncs this could be shortened — but 90 days is safe
+  const lookback = new Date();
+  lookback.setDate(lookback.getDate() - 90);
+  const startDate = lookback.toISOString().slice(0,19); // YYYY-MM-DDTHH:MM:SS
+
+  let ids = [];
+  try{
+    const res = await mcFetch(
+      `/restapi/v1/documents/search/infoCardVaultChange?startDate=${encodeURIComponent(startDate)}`
+    );
+    ids = Array.isArray(res) ? res : (res.items || res.results || res.ids || []);
+    _diag['infocard_vault_change_count'] = ids.length;
+  } catch(e){
+    _diag['infocard_sync_error'] = e.message;
+    return;
+  }
+
+  if(!ids.length) return;
+
+  // Fetch details in batches of 20 to avoid overwhelming the API
+  const BATCH = 20;
+  const details = [];
+  const unknownAuthors = new Set();
+
+  for(let i=0; i<ids.length; i+=BATCH){
+    const batch = ids.slice(i, i+BATCH);
+    const results = await Promise.allSettled(
+      batch.map(id => {
+        const infocardId = typeof id === 'string' ? id : (id.infocardId || id.id || id);
+        return mcFetch(`/v1/document/${encodeURIComponent(infocardId)}`);
+      })
+    );
+    results.forEach(r => {
+      if(r.status === 'fulfilled' && r.value){
+        const d = r.value;
+        // Only keep released infocards (releaseDate exists and lifecycleStatus indicates released)
+        if(!d.releaseDate) return;
+        const category = classifyInfocardSubtype(d.infocardTypeName || d.infocardType || '');
+        if(!category) return; // Not a tracked subtype
+        const authorRaw = d.author || d.owner || '';
+        const authorName = resolveAuthor(authorRaw);
+        if(authorRaw && !state.settings.members.some(m => normName(m) === normName(authorName))){
+          unknownAuthors.add(authorRaw); // Track GUIDs we couldn't resolve
+        }
+        details.push({
+          id:           d.infocardId || d.id || '',
+          number:       d.infocardNumber || '',
+          title:        d.title || '',
+          subtype:      d.infocardTypeName || d.infocardType || '',
+          category,
+          authorRaw,
+          author:       authorName,
+          releaseDate:  normalizeDate(d.releaseDate),
+          createDate:   normalizeDate(d.createDate),
+          lifecycleStatus: d.lifecycleStatus || '',
+          source:       'MasterControl',
+        });
+      }
+    });
+  }
+
+  // Preserve existing authorMap, add any new unknown authors as empty entries
+  const existingMap = state.infocardData?.authorMap || {};
+  unknownAuthors.forEach(guid => {
+    if(!existingMap[guid]) existingMap[guid] = ''; // Blank = needs mapping
+  });
+
+  state.infocardData = {
+    items: details,
+    lastSync: new Date().toISOString(),
+    authorMap: existingMap,
+    unknownAuthors: [...unknownAuthors],
+  };
+
+  _diag['infocard_details_fetched'] = details.length;
+  _diag['unknown_author_guids'] = [...unknownAuthors].slice(0,5);
+}
+
+// Helpers for infocard display
+function getInfocardsByCategory(category){
+  return (state.infocardData?.items || []).filter(i => i.category === category);
+}
+
+function getInfocardsByAuthor(authorName){
+  return (state.infocardData?.items || []).filter(i =>
+    normName(i.author) === normName(authorName)
+  );
+}
+
+function countInfocardsThisWeek(category, authorName){
+  const { start, end } = thisWeekRange();
+  return (state.infocardData?.items || []).filter(i => {
+    if(category && i.category !== category) return false;
+    if(authorName && normName(i.author) !== normName(authorName)) return false;
+    const d = new Date(i.releaseDate || 0);
+    return d >= start && d <= end;
+  }).length;
+}
 
 // ─────────────────────────────────────────────
 // ROUTER TASK DEFINITIONS (from FTE spreadsheet)
