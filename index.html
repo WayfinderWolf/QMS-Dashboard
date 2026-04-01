@@ -2661,28 +2661,59 @@ document.getElementById('settings-modal').addEventListener('click',e=>{
 // Subtypes are filtered to: Artwork/Spec, SOP/Work Instructions, Change Control docs.
 // ─────────────────────────────────────────────
 
-// Subtype keywords that map to our three tracked categories
+// Infocard subtype → dashboard category mapping.
+// Based on confirmed MC infocardTypeName values from doTERRA instance.
+// Each entry: { match: regex, category, kpiId, tracked: bool }
+//   kpiId links to DEFAULT_KPI_RULES for KPI actuals tracking
+//   tracked:false = shown on Infocards page but not counted in KPIs
+const INFOCARD_TYPE_MAP = [
+  // ── Specialist I Global ──────────────────────────────────────────
+  { match: /^Oil Testing Spec/i,               category:'Specifications',      kpiId:'ots',  tracked:true  },
+  { match: /^Bulk Spec/i,                      category:'Specifications',      kpiId:'bs',   tracked:true  },
+  { match: /^Packaging BOM Spec/i,             category:'Specifications',      kpiId:'pbs',  tracked:true  },
+  { match: /^Component Spec/i,                 category:'Specifications',      kpiId:'cs',   tracked:true  },
+  { match: /^Foreign Market Managed/i,         category:'Specifications',      kpiId:'fmm',  tracked:true  },
+  { match: /^Finished Product Spec/i,          category:'Specifications',      kpiId:'fps',  tracked:true  },
+  // ── Specialist I Regional ────────────────────────────────────────
+  { match: /^Ingredient Spec/i,                category:'Specifications',      kpiId:'ing',  tracked:true  },
+  { match: /^Assembly Spec/i,                  category:'Specifications',      kpiId:'as',   tracked:true  },
+  { match: /^Artwork Approval/i,               category:'Artwork',             kpiId:'art5', tracked:true  },
+  { match: /^Artwork Proof/i,                  category:'Artwork',             kpiId:'mcu',  tracked:true  },
+  // ── Allergen reviews — tracked but not mapped to author ──────────
+  { match: /^Oil Allergen Declaration/i,       category:'Specifications',      kpiId:null,   tracked:false },
+  { match: /^Allergen Declaration/i,           category:'Specifications',      kpiId:null,   tracked:false },
+  // ── Specialist II ────────────────────────────────────────────────
+  { match: /^Manual/i,                         category:'SOP/Work Instructions', kpiId:'man', tracked:true  },
+  { match: /^Polic/i,                          category:'SOP/Work Instructions', kpiId:'man', tracked:true  },
+  { match: /^Plan/i,                           category:'SOP/Work Instructions', kpiId:'man', tracked:true  },
+  { match: /^Job Description/i,                category:'SOP/Work Instructions', kpiId:'man', tracked:true  },
+  { match: /^SOP/i,                            category:'SOP/Work Instructions', kpiId:'sop', tracked:true  },
+  { match: /^Work Instruction/i,               category:'SOP/Work Instructions', kpiId:'sop', tracked:true  },
+  { match: /^Form/i,                           category:'SOP/Work Instructions', kpiId:'frm', tracked:true  },
+  // ── Specialist III ───────────────────────────────────────────────
+  { match: /^Change Control/i,                 category:'Change Control',      kpiId:'cc',   tracked:true  },
+  { match: /^CAPA/i,                           category:'Change Control',      kpiId:'capa', tracked:true  },
+  // ── Out of scope / WF only ───────────────────────────────────────
+  // Oil/Supplement/Cosmetic Formula Reviews — tracked via WF only
+  // Proof HQ Artwork Reviews — out of scope for this dashboard
+];
+
+// Backward-compat wrapper used by existing code
 const INFOCARD_SUBTYPES = {
-  'Artwork/Specification': [
-    /artwork/i, /specification/i, /spec/i, /artwork approval/i,
-    /assembly/i, /finished product/i, /fps/i, /packaging/i, /component/i,
-    /ingredient/i, /bulk/i, /formula/i, /testing/i,
-  ],
-  'SOP/Work Instructions': [
-    /sop/i, /work instruction/i, /standard operating/i, /policy/i,
-    /procedure/i, /manual/i, /plan/i, /form/i,
-  ],
-  'Change Control': [
-    /change control/i, /deviation/i, /capa/i, /nonconformance/i, /nc/i,
-  ],
+  'Artwork/Specification': [],
+  'SOP/Work Instructions': [],
+  'Change Control': [],
 };
 
-function classifyInfocardSubtype(typeName){
+function classifyInfocard(typeName){
   if(!typeName) return null;
-  for(const [category, patterns] of Object.entries(INFOCARD_SUBTYPES)){
-    if(patterns.some(p => p.test(typeName))) return category;
-  }
-  return null; // not in a tracked category — skip
+  const entry = INFOCARD_TYPE_MAP.find(e => e.match.test(typeName));
+  return entry || null;
+}
+
+function classifyInfocardSubtype(typeName){
+  const entry = classifyInfocard(typeName);
+  return entry ? entry.category : null;
 }
 
 function resolveAuthor(authorRaw){
@@ -2784,8 +2815,11 @@ async function syncInfocards(){
         //   "Open"    = in-progress                ← exclude
         const status = (d.lifecycleStatus||'');
         if(status !== 'Release') return;
-        const category = classifyInfocardSubtype(d.infocardTypeName || d.infocardType || '');
-        if(!category) return; // Not a tracked subtype
+        const infocardEntry = classifyInfocard(d.infocardTypeName || d.infocardType || '');
+        if(!infocardEntry) return; // Not a tracked subtype
+        const category = infocardEntry.category;
+        const kpiId    = infocardEntry.kpiId;
+        const tracked  = infocardEntry.tracked;
         const authorRaw = d.author || d.owner || '';
         const authorName = resolveAuthor(authorRaw);
         if(authorRaw && !state.settings.members.some(m => normName(m) === normName(authorName))){
@@ -2797,6 +2831,8 @@ async function syncInfocards(){
           title:        d.title || '',
           subtype:      d.infocardTypeName || d.infocardType || '',
           category,
+          kpiId,
+          tracked,
           authorRaw,
           author:       authorName,
           releaseDate:  normalizeDate(d.releaseDate),
@@ -3050,19 +3086,47 @@ const DEFAULT_KPI_RULES = [
   },
 ];
 
-// Count matching completed tasks within a date range
+// Count matching completed tasks + released infocards within a date range.
+// Released infocards are the primary completion signal for MC document work.
+// WF tasks cover formula reviews and other tasks not trackable in MC.
 function countKPITasks(rule, startDate, endDate){
+  // Count from WF/MC completed task imports
   const allT = [
     ...(state.wfData?.tasks || []),
     ...(state.mcCompletedData?.tasks || []),
     ...(state.mcData?.docTasks || []).filter(t => t.status === 'completed'),
   ];
-  return allT.filter(t => {
+  const taskCount = allT.filter(t => {
     if(!rule.matchFn(t)) return false;
     if(t.status !== 'completed') return false;
     const d = new Date(t.completedDate || t.queuedDate || 0);
     return d >= startDate && d <= endDate;
   }).length;
+
+  // Count from released infocards — primary completion signal for MC documents
+  // Match by kpiId or by category+rule alignment
+  const infocardCount = (state.infocardData?.items || []).filter(i => {
+    if(!i.tracked) return false;
+    if(!i.releaseDate) return false;
+    const d = new Date(i.releaseDate);
+    if(d < startDate || d > endDate) return false;
+    // Match infocard to KPI rule by kpiId prefix or direct rule mapping
+    return matchInfocardToRule(i, rule);
+  }).length;
+
+  return taskCount + infocardCount;
+}
+
+// Map a released infocard to a KPI rule
+function matchInfocardToRule(infocard, rule){
+  const id = rule.id;
+  const kpi = infocard.kpiId;
+  // Direct mappings from INFOCARD_TYPE_MAP kpiIds to KPI rule ids
+  if(id === 'mc_artwork_upload') return kpi === 'mcu' || kpi === 'art5';
+  if(id === 'assembly_spec')     return kpi === 'as';
+  if(id === 'fps_global')        return kpi === 'fps' || kpi === 'fpsr' || kpi === 'ing';
+  if(id === 'change_control')    return kpi === 'cc' || kpi === 'capa';
+  return false;
 }
 
 // Get this week's date range (Mon-Sun)
@@ -3089,7 +3153,7 @@ function getAssignedPersons(rule){
     .map(a => a.person);
 }
 
-// Count matching tasks by person
+// Count matching tasks by person — includes released infocards as completions
 function countKPIByPerson(rule, startDate, endDate){
   const allT = [
     ...(state.wfData?.tasks || []),
@@ -3097,12 +3161,22 @@ function countKPIByPerson(rule, startDate, endDate){
     ...(state.mcData?.docTasks || []).filter(t => t.status === 'completed'),
   ];
   const byPerson = {};
+  // Count WF/MC tasks
   allT.forEach(t => {
     if(!rule.matchFn(t)) return;
     if(t.status !== 'completed') return;
     const d = new Date(t.completedDate || t.queuedDate || 0);
     if(d < startDate || d > endDate) return;
     const name = t.assignee || 'Unassigned';
+    byPerson[name] = (byPerson[name] || 0) + 1;
+  });
+  // Count released infocards per author
+  (state.infocardData?.items || []).forEach(i => {
+    if(!i.tracked || !i.releaseDate) return;
+    const d = new Date(i.releaseDate);
+    if(d < startDate || d > endDate) return;
+    if(!matchInfocardToRule(i, rule)) return;
+    const name = i.author || 'Unknown';
     byPerson[name] = (byPerson[name] || 0) + 1;
   });
   return byPerson;
