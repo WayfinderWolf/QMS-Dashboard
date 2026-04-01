@@ -2791,10 +2791,16 @@ async function syncInfocards(){
     results.forEach(r => {
       if(r.status === 'fulfilled' && r.value){
         const d = r.value;
-        // Log unique lifecycle statuses to _diag for discovery
+        // Log unique lifecycle statuses and subtype values to _diag
         if(d.lifecycleStatus){
           _diag['infocard_lifecycle_statuses'] = _diag['infocard_lifecycle_statuses'] || {};
           _diag['infocard_lifecycle_statuses'][d.lifecycleStatus] = (_diag['infocard_lifecycle_statuses'][d.lifecycleStatus]||0)+1;
+        }
+        // Log all subtype values seen (for debugging type map mismatches)
+        const subtypeVal = d.infocardTypeName || d.infocardType || '';
+        if(subtypeVal){
+          _diag['infocard_subtypes_seen'] = _diag['infocard_subtypes_seen'] || {};
+          _diag['infocard_subtypes_seen'][subtypeVal] = (_diag['infocard_subtypes_seen'][subtypeVal]||0)+1;
         }
         // Must have a release date
         if(!d.releaseDate) return;
