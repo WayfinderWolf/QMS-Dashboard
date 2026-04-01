@@ -764,7 +764,7 @@ async function syncMasterControl(){
 
   // 15-second timeout guard
   const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('Sync timed out after 45s — check Worker URL and token')), 45000)
+    setTimeout(() => reject(new Error('Sync timed out after 90s — check Worker URL and token')), 90000)
   );
 
   try{
@@ -819,13 +819,21 @@ async function doSync(){
     wfTasks:   [],
   };
 
-  // Sync released infocards — non-blocking so a failure doesn't kill the task sync
-  try{ await syncInfocards(); }
-  catch(e){ _diag['infocard_sync_error'] = e.message; }
-
   state.lastSync = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
   snapshotHistory();
   persist();
+
+  // Sync infocards after task sync completes — runs outside the main timeout
+  // so a slow infocard fetch never blocks or fails the task sync
+  setTimeout(async () => {
+    try{
+      await syncInfocards();
+      persist();
+      render();
+    } catch(e){
+      _diag['infocard_sync_error'] = e.message;
+    }
+  }, 100);
 }
 
 // Auto-sync loop
@@ -2719,7 +2727,7 @@ async function syncInfocards(){
   // Fetch in batches of 25, stopping once we have 300 released infocards
   // This avoids fetching thousands of IDs when most are Draft/Archive
   const BATCH = 25;
-  const TARGET_RELEASED = 300;
+  const TARGET_RELEASED = 150;  // 150 is plenty for 30-day trending
   const details = [];
   const unknownAuthors = new Set();
 
