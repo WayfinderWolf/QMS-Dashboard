@@ -290,12 +290,7 @@
       </div>
       <textarea class="form-input" id="author-guid-map" rows="5"
         placeholder="OEYN34XBDRFSJGRHMS=Casey Wolf&#10;ABC123DEF456=Jordan Kartchner"></textarea>
-      ${state.infocardData?.unknownAuthors?.length ? `
-      <div style="margin-top:6px;padding:8px 10px;background:var(--warning-bg);border-radius:var(--radius-sm);font-size:11px;color:var(--warning)">
-        ⚠ ${state.infocardData.unknownAuthors.length} unmapped author GUID(s) found after last sync —
-        add them above to see names on the Infocards page.<br>
-        <span style="font-family:monospace;font-size:10px">${state.infocardData.unknownAuthors.join(', ')}</span>
-      </div>` : ''}
+      <div id="guid-warning" style="display:none;margin-top:6px;padding:8px 10px;background:var(--warning-bg);border-radius:var(--radius-sm);font-size:11px;color:var(--warning)"></div>
     </div>
 
     <div style="margin-top:12px">
@@ -2598,6 +2593,17 @@ function openSettings(){
   const guidMap = state.infocardData?.authorMap || {};
   const guidEl = document.getElementById('author-guid-map');
   if(guidEl) guidEl.value = Object.entries(guidMap).map(([k,v])=>k+'='+v).join('\n');
+  // Show unknown GUID warning dynamically
+  const unknowns = (state.infocardData?.unknownAuthors||[]).filter(g=>!guidMap[g]||guidMap[g]==='');
+  const warnEl = document.getElementById('guid-warning');
+  if(warnEl){
+    if(unknowns.length){
+      warnEl.style.display = 'block';
+      warnEl.innerHTML = `⚠ ${unknowns.length} unmapped author GUID(s) found — add them above to see names on the Infocards page.<br><span style="font-family:monospace;font-size:10px">${unknowns.join('<br>')}</span>`;
+    } else {
+      warnEl.style.display = 'none';
+    }
+  }
 }
 function closeSettings(){ document.getElementById('settings-modal').classList.add('hidden'); }
 function saveSettings(){
@@ -2706,17 +2712,22 @@ async function syncInfocards(){
 
   if(!ids.length) return;
 
-  // Fetch details in batches of 20 to avoid overwhelming the API
-  const BATCH = 20;
+  // Cap at 500 most recent IDs — 2000+ would cause too many API calls
+  // The vault change endpoint returns oldest-first, so slice from the end
+  const cappedIds = ids.slice(-500);
+  _diag['infocard_ids_capped'] = cappedIds.length;
+
+  // Fetch details in batches of 25
+  const BATCH = 25;
   const details = [];
   const unknownAuthors = new Set();
 
-  for(let i=0; i<ids.length; i+=BATCH){
-    const batch = ids.slice(i, i+BATCH);
+  for(let i=0; i<cappedIds.length; i+=BATCH){
+    const batch = cappedIds.slice(i, i+BATCH);
     const results = await Promise.allSettled(
       batch.map(id => {
         const infocardId = typeof id === 'string' ? id : (id.infocardId || id.id || id);
-        return mcFetch(`/v1/document/${encodeURIComponent(infocardId)}`);
+        return mcFetch(`/restapi/v1/document/${encodeURIComponent(infocardId)}`);
       })
     );
     results.forEach(r => {
