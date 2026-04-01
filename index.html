@@ -1940,7 +1940,8 @@ function renderInfocards(){
   const items = state.infocardData?.items || [];
   const { start: wkStart, end: wkEnd } = thisWeekRange();
   const roll4 = rollingWeeksRange(4);
-  const categories = Object.keys(INFOCARD_SUBTYPES);
+  // Derive categories from actual stored items, not the old INFOCARD_SUBTYPES keys
+  const categories = [...new Set((state.infocardData?.items||[]).map(i=>i.category).filter(Boolean))].sort();
 
   if(!state.infocardData){
     return `
@@ -2066,7 +2067,7 @@ function renderMemberInfocards(name){
 
   const { start, end } = thisWeekRange();
   const thisWk = items.filter(i=>new Date(i.releaseDate)>=start&&new Date(i.releaseDate)<=end);
-  const categories = Object.keys(INFOCARD_SUBTYPES);
+  const categories = [...new Set(items.map(i=>i.category).filter(Boolean))].sort();
 
   return `
   <div class="full-row card" style="margin-bottom:14px">
