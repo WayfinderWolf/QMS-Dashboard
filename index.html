@@ -2733,8 +2733,20 @@ async function syncInfocards(){
     results.forEach(r => {
       if(r.status === 'fulfilled' && r.value){
         const d = r.value;
-        // Only keep released infocards (releaseDate exists and lifecycleStatus indicates released)
+        // Log unique lifecycle statuses to _diag for discovery
+        if(d.lifecycleStatus){
+          _diag['infocard_lifecycle_statuses'] = _diag['infocard_lifecycle_statuses'] || {};
+          _diag['infocard_lifecycle_statuses'][d.lifecycleStatus] = (_diag['infocard_lifecycle_statuses'][d.lifecycleStatus]||0)+1;
+        }
+        // Must have a release date
         if(!d.releaseDate) return;
+        // Filter to released/effective status only — exclude archived, obsolete, draft, void
+        const status = (d.lifecycleStatus||'').toLowerCase();
+        const isReleased = /released|effective|approved|active|current/i.test(status);
+        const isArchived = /arch|obsolete|void|retired|supersed|cancel|inactive|deleted/i.test(status);
+        if(isArchived) return;
+        // If status doesn't match known released patterns, still include if releaseDate exists
+        // (some lifecycles use custom status names — don't over-filter)
         const category = classifyInfocardSubtype(d.infocardTypeName || d.infocardType || '');
         if(!category) return; // Not a tracked subtype
         const authorRaw = d.author || d.owner || '';
