@@ -2816,7 +2816,22 @@ async function syncInfocards(){
         //   "Open"    = in-progress                ← exclude
         const status = (d.lifecycleStatus||'');
         if(status !== 'Release') return;
-        const infocardEntry = classifyInfocard(d.infocardTypeName || d.infocardType || '');
+        // Debug: log what type fields exist on this record
+        const typeVal = d.infocardTypeName || d.infocardType || d.type || d.subtype || '';
+        if(Object.keys(_diag).length < 50){
+          _diag['infocard_field_sample'] = _diag['infocard_field_sample'] || [];
+          if(_diag['infocard_field_sample'].length < 3){
+            _diag['infocard_field_sample'].push({
+              infocardTypeName: d.infocardTypeName,
+              infocardType: d.infocardType,
+              type: d.type,
+              subtype: d.subtype,
+              lifecycleStatus: d.lifecycleStatus,
+              title: (d.title||'').slice(0,40),
+            });
+          }
+        }
+        const infocardEntry = classifyInfocard(typeVal);
         if(!infocardEntry) return; // Not a tracked subtype
         const category = infocardEntry.category;
         const kpiId    = infocardEntry.kpiId;
