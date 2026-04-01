@@ -2654,40 +2654,43 @@ document.getElementById('settings-modal').addEventListener('click',e=>{
 // ─────────────────────────────────────────────
 
 // Infocard subtype → dashboard category mapping.
-// Based on confirmed MC infocardTypeName values from doTERRA instance.
+// Subtype strings confirmed from MC API via showDiag() infocard_subtypes_seen.
 // Each entry: { match: regex, category, kpiId, tracked: bool }
-//   kpiId links to DEFAULT_KPI_RULES for KPI actuals tracking
+//   kpiId links to GRANULAR_KPI_RULES
 //   tracked:false = shown on Infocards page but not counted in KPIs
 const INFOCARD_TYPE_MAP = [
-  // ── Specialist I Global ──────────────────────────────────────────
-  { match: /^Oil Testing Spec/i,               category:'Specifications',      kpiId:'ots',  tracked:true  },
-  { match: /^Bulk Spec/i,                      category:'Specifications',      kpiId:'bs',   tracked:true  },
-  { match: /^Packaging BOM Spec/i,             category:'Specifications',      kpiId:'pbs',  tracked:true  },
-  { match: /^Component Spec/i,                 category:'Specifications',      kpiId:'cs',   tracked:true  },
-  { match: /^Foreign Market Managed/i,         category:'Specifications',      kpiId:'fmm',  tracked:true  },
-  { match: /^Finished Product Spec/i,          category:'Specifications',      kpiId:'fps',  tracked:true  },
-  // ── Specialist I Regional ────────────────────────────────────────
-  { match: /^Ingredient Spec/i,                category:'Specifications',      kpiId:'ing',  tracked:true  },
-  { match: /^Assembly Spec/i,                  category:'Specifications',      kpiId:'as',   tracked:true  },
-  { match: /^Artwork Approval/i,               category:'Artwork',             kpiId:'art5', tracked:true  },
-  { match: /^Artwork Proof/i,                  category:'Artwork',             kpiId:'mcu',  tracked:true  },
-  // ── Allergen reviews — tracked but not mapped to author ──────────
-  { match: /^Oil Allergen Declaration/i,       category:'Specifications',      kpiId:null,   tracked:false },
-  { match: /^Allergen Declaration/i,           category:'Specifications',      kpiId:null,   tracked:false },
-  // ── Specialist II ────────────────────────────────────────────────
-  { match: /^Manual/i,                         category:'SOP/Work Instructions', kpiId:'man', tracked:true  },
-  { match: /^Polic/i,                          category:'SOP/Work Instructions', kpiId:'man', tracked:true  },
-  { match: /^Plan/i,                           category:'SOP/Work Instructions', kpiId:'man', tracked:true  },
-  { match: /^Job Description/i,                category:'SOP/Work Instructions', kpiId:'man', tracked:true  },
-  { match: /^SOP/i,                            category:'SOP/Work Instructions', kpiId:'sop', tracked:true  },
-  { match: /^Work Instruction/i,               category:'SOP/Work Instructions', kpiId:'sop', tracked:true  },
-  { match: /^Form/i,                           category:'SOP/Work Instructions', kpiId:'frm', tracked:true  },
-  // ── Specialist III ───────────────────────────────────────────────
-  { match: /^Change Control/i,                 category:'Change Control',      kpiId:'cc',   tracked:true  },
-  { match: /^CAPA/i,                           category:'Change Control',      kpiId:'capa', tracked:true  },
-  // ── Out of scope / WF only ───────────────────────────────────────
-  // Oil/Supplement/Cosmetic Formula Reviews — tracked via WF only
-  // Proof HQ Artwork Reviews — out of scope for this dashboard
+  // ── Artwork ──────────────────────────────────────────────────────
+  { match: /^Artwork Proof$/i,                 category:'Artwork',               kpiId:'r_mcu',  tracked:true  },
+  { match: /^Artwork Approval$/i,              category:'Artwork',               kpiId:'r_art5', tracked:true  },
+  // ── Specifications — Team-tracked ────────────────────────────────
+  { match: /^Oil Testing Specification$/i,     category:'Specifications',        kpiId:'g_ots',  tracked:true  },
+  { match: /^Bulk Spec$/i,                     category:'Specifications',        kpiId:'g_bs',   tracked:true  },
+  { match: /^Finished Product Spec$/i,         category:'Specifications',        kpiId:'fps',    tracked:true  },
+  { match: /^FGT Spec$/i,                      category:'Specifications',        kpiId:'fps',    tracked:true  },
+  { match: /^Assembly Specification$/i,        category:'Specifications',        kpiId:'r_as',   tracked:true  },
+  { match: /^Foreign Market Managed$/i,        category:'Specifications',        kpiId:'g_fmm',  tracked:true  },
+  { match: /^Job Description$/i,               category:'SOP/Work Instructions', kpiId:'man',    tracked:true  },
+  // ── Specifications — Visible but not team KPI ─────────────────────
+  { match: /^3rd Party Mfg Pack Spec$/i,       category:'Specifications',        kpiId:null,     tracked:true  },
+  { match: /^Oil Packaging Spec$/i,            category:'Specifications',        kpiId:null,     tracked:true  },
+  { match: /^OL Packaging Spec$/i,             category:'Specifications',        kpiId:null,     tracked:true  },
+  { match: /^PLF Good Testing Spec$/i,         category:'Specifications',        kpiId:null,     tracked:true  },
+  { match: /^RMS - (Blend|Single)$/i,          category:'Specifications',        kpiId:null,     tracked:true  },
+  { match: /^Stability Protocol$/i,            category:'Specifications',        kpiId:null,     tracked:true  },
+  { match: /^Allergen Declaration$/i,          category:'Specifications',        kpiId:null,     tracked:false },
+  // ── SOP/Work Instructions ─────────────────────────────────────────
+  { match: /^SOP(\s*\(Annual Review\)\s*)?$/i, category:'SOP/Work Instructions', kpiId:'sop',    tracked:true  },
+  { match: /^Work Instruction$/i,              category:'SOP/Work Instructions', kpiId:'sop',    tracked:true  },
+  { match: /^Plan$/i,                          category:'SOP/Work Instructions', kpiId:'man',    tracked:true  },
+  { match: /^Form$/i,                          category:'SOP/Work Instructions', kpiId:'frm',    tracked:true  },
+  // ── Change Control ────────────────────────────────────────────────
+  { match: /^Change Control$/i,                category:'Change Control',        kpiId:'cc',     tracked:true  },
+  { match: /^CAPA$/i,                          category:'Change Control',        kpiId:'capa',   tracked:true  },
+  // ── Explicitly excluded — not shown on Infocards page ─────────────
+  // Production Record, Training Records, Master Template, Training Material,
+  // Record, MC Signature Agreements, Engineering Study/Stage Gate,
+  // Distribution Report, System Config Spec Temp, OQ, IOQ, Method
+  // These are excluded by returning null from classifyInfocard
 ];
 
 // Backward-compat wrapper used by existing code
