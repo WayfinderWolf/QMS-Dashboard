@@ -2712,18 +2712,20 @@ async function syncInfocards(){
 
   if(!ids.length) return;
 
-  // Cap at 500 most recent IDs — 2000+ would cause too many API calls
-  // The vault change endpoint returns oldest-first, so slice from the end
-  const cappedIds = ids.slice(-500);
-  _diag['infocard_ids_capped'] = cappedIds.length;
+  // Reverse so newest IDs are first — we want the most recently changed docs
+  const sortedIds = [...ids].reverse();
+  _diag['infocard_ids_total'] = sortedIds.length;
 
-  // Fetch details in batches of 25
+  // Fetch in batches of 25, stopping once we have 300 released infocards
+  // This avoids fetching thousands of IDs when most are Draft/Archive
   const BATCH = 25;
+  const TARGET_RELEASED = 300;
   const details = [];
   const unknownAuthors = new Set();
 
-  for(let i=0; i<cappedIds.length; i+=BATCH){
-    const batch = cappedIds.slice(i, i+BATCH);
+  for(let i=0; i<sortedIds.length; i+=BATCH){
+    if(details.length >= TARGET_RELEASED) break;
+    const batch = sortedIds.slice(i, i+BATCH);
     const results = await Promise.allSettled(
       batch.map(id => {
         const infocardId = typeof id === 'string' ? id : (id.infocardId || id.id || id);
