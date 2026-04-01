@@ -1849,7 +1849,8 @@ function renderKPIs(){
           const r4       = rollingWeeksRange(4);
           const rollAct  = countGranularKPI(rule, r4.start, r4.end);
           const rollAvg  = (rollAct/4).toFixed(1);
-          const pct      = rule.target>0 ? Math.round(actual/rule.target*100) : 0;
+          const target   = getGranularTarget(rule);
+          const pct      = target>0 ? Math.round(actual/target*100) : 0;
           const color    = pct>=100?'var(--success)':pct>=70?'var(--warning)':actual>0?'var(--text-muted)':'var(--danger)';
           const byPerson = countGranularKPIByPerson(rule, wkStart, wkEnd);
           const people   = Object.entries(byPerson).sort((a,b)=>b[1]-a[1]);
@@ -1857,7 +1858,7 @@ function renderKPIs(){
           return '<tr>'
             +'<td><div style="font-size:12px;font-weight:500">'+rule.label+'</div>'+(rule.noAuthor?'<div class="text-xs text-subtle">Author not tracked</div>':'')+'</td>'
             +'<td class="text-xs text-muted">'+rule.role+'</td>'
-            +'<td style="text-align:right;font-size:12px">'+rule.target+'</td>'
+            +'<td style="text-align:right;font-size:12px">'+target+'</td>'
             +'<td style="text-align:right"><span style="font-size:14px;font-weight:600;color:'+color+'">'+actual+'</span>'
               +' <span style="font-size:10px;color:var(--text-subtle)">'+pct+'%</span></td>'
             +'<td style="text-align:right;font-size:12px;color:var(--text-muted)">'+rollAvg+'</td>'
@@ -1867,7 +1868,7 @@ function renderKPIs(){
         }).join('')}
       </tbody>
     </table>
-  </div>\`;
+  </div>`;
 }
 
 // ── SCHEDULE PAGE ──
@@ -2960,6 +2961,23 @@ const GRANULAR_KPI_RULES = [
   { id:'cc',     label:'Change Control',                                role:'Spec III',                 target:28,   hrs:1.75, infocardMatch:/^Change Control/i,            wfMatch:t=>/route\s*change\s*control/i.test(t.title||'') },
   { id:'capa',   label:'CAPA',                                          role:'Spec III',                 target:0.25, hrs:2.00, infocardMatch:/^CAPA/i,                      wfMatch:null },
 ];
+
+// Get the weekly target for a granular KPI rule.
+// Uses the schedule quantity if assigned, otherwise falls back to Router baseline.
+function getGranularTarget(rule){
+  const thisWkStart = getWeekDates(0);
+  const wk = getScheduleWeek(thisWkStart);
+  // Find matching Router task IDs for this rule
+  const matchingTasks = ROUTER_TASKS.filter(rt => rule.infocardMatch && rule.infocardMatch.test(rt.name));
+  if(!matchingTasks.length) return rule.target;
+  // Sum scheduled quantities for matching tasks
+  let total = 0;
+  matchingTasks.forEach(rt => {
+    const schedTask = wk.tasks.find(t => t.taskId === rt.id);
+    total += schedTask ? Number(schedTask.qty) : rt.qty;
+  });
+  return total || rule.target;
+}
 
 function countGranularKPI(rule, startDate, endDate){
   let count = 0;
