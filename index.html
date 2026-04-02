@@ -1453,6 +1453,7 @@ function renderTeam(){
   const prev = h.length>=2 ? h[h.length-2] : null;
   const cur  = h.length   ? h[h.length-1]  : null;
   const delta = cur && prev ? cur.docCompleted - prev.docCompleted : 0;
+  const { start: wkStart, end: wkEnd } = thisWeekRange();
 
   return `
   <div class="page-header">
@@ -1679,7 +1680,19 @@ function renderTrends(){
   const prevW  = h.length>=2  ? h[h.length-2]  : null;
   const prevM  = h.length>=5  ? h[h.length-5]  : null;
   const prevY  = h.length>=53 ? h[0]            : null;
-  const cur    = h.length     ? h[h.length-1]   : null;
+  const curRaw = h.length     ? h[h.length-1]   : null;
+
+  // Override docCompleted with live count including infocards
+  // (old snapshots predate infocard tracking so may undercount)
+  const { start: wkStart, end: wkEnd } = thisWeekRange();
+  const liveInfocards = (state.infocardData?.items||[]).filter(i=>
+    i.tracked && i.releaseDate &&
+    new Date(i.releaseDate)>=wkStart && new Date(i.releaseDate)<=wkEnd
+  ).length;
+  const liveCompleted = allTasks().filter(t=>t.status==='completed').length
+    + (state.mcCompletedData?.tasks||[]).length
+    + liveInfocards;
+  const cur = curRaw ? { ...curRaw, docCompleted: liveCompleted } : null;
   function chip(cur,prev,field,lowerBetter=false){
     if(!prev||cur===null) return '';
     const d=Math.round((cur[field]||0)-(prev[field]||0));
