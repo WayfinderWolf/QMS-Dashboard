@@ -2338,16 +2338,22 @@ function renderMember(name){
   const mc = memberColor(mi<0?0:mi);
   const pct= s.tasks.length?Math.round(s.completed/s.tasks.length*100):0;
 
-  // Build real per-member completion history from ALL imported sources
+  // Build per-member completion history from ALL sources:
+  // WF tasks, MC completed task import, and released infocards (primary MC signal)
   const memberDoneWF = (state.wfData?.tasks||[]).filter(t=>
     t.status==='completed' && normName(t.assignee)===normName(name) && t.completedDate
   );
   const memberDoneMC = (state.mcCompletedData?.tasks||[]).filter(t=>
     normName(t.assignee)===normName(name) && t.completedDate
   );
-  const memberDoneTasks = [...memberDoneWF, ...memberDoneMC];
+  // Released infocards — convert to task-like objects with releaseDate as completedDate
+  const memberDoneInfocards = (state.infocardData?.items||[]).filter(i=>
+    i.tracked && normName(i.author)===normName(name) && i.releaseDate
+  ).map(i=>({ completedDate: i.releaseDate, title: i.title, source: 'MC Infocard' }));
 
-  // Build a simple weekly chart from the last 13 weeks using real completedDate values
+  const memberDoneTasks = [...memberDoneWF, ...memberDoneMC, ...memberDoneInfocards];
+
+  // Build weekly chart from last 13 weeks
   const now = new Date(); now.setHours(23,59,59,0);
   const memberH = [];
   for(let w=12; w>=0; w--){
@@ -2361,9 +2367,10 @@ function renderMember(name){
     memberH.push({ date: label, completed: count });
   }
 
-  const memberCompleted = (state.mcCompletedData?.tasks||[]).filter(t=>
-    normName(t.assignee)===normName(name)
-  );
+  const memberCompleted = [
+    ...(state.mcCompletedData?.tasks||[]).filter(t=>normName(t.assignee)===normName(name)),
+    ...memberDoneInfocards,
+  ];
 
   const sorted = s.tasks.slice().sort((a,b)=>{
     if(isOverdue(a)&&!isOverdue(b)) return -1;
