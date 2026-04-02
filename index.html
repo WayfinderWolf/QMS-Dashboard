@@ -1220,12 +1220,22 @@ function getMemberSummary(name){
   const od = t => t.status!=='completed' && t.dueDate && new Date(t.dueDate)<now;
   const activeTasks    = tasks.filter(t=>t.status==='pending'||t.status==='in_progress');
   const completedTasks = tasks.filter(t=>t.status==='completed');
+
+  // Count released infocards this week as additional completions
+  const { start: wkStart, end: wkEnd } = thisWeekRange();
+  const infocardCompletions = (state.infocardData?.items||[]).filter(i=>
+    i.tracked && i.releaseDate &&
+    normName(i.author)===normName(name) &&
+    new Date(i.releaseDate)>=wkStart && new Date(i.releaseDate)<=wkEnd
+  ).length;
+
   return {
     pending:        activeTasks.length,
-    completed:      completedTasks.length,
+    completed:      completedTasks.length + infocardCompletions,
+    infocards:      infocardCompletions,
     overdue:        tasks.filter(od).length,
-    tasks:          activeTasks,    // Active Tasks table only shows active
-    allTasks:       tasks,          // Full list for other uses
+    tasks:          activeTasks,
+    allTasks:       tasks,
   };
 }
 
@@ -2686,7 +2696,7 @@ const INFOCARD_TYPE_MAP = [
   { match: /^Form$/i,                          category:'SOP/Work Instructions', kpiId:'frm',    tracked:true  },
   // ── Change Control ────────────────────────────────────────────────
   { match: /^Change Control$/i,                category:'Change Control',        kpiId:'cc',     tracked:true  },
-  { match: /^CAPA$/i,                          category:'Change Control',        kpiId:'capa',   tracked:true  },
+  { match: /^CAPA/i,                           category:'Change Control',        kpiId:'capa',   tracked:true  },
   // ── Explicitly excluded — not shown on Infocards page ─────────────
   // Production Record, Training Records, Master Template, Training Material,
   // Record, MC Signature Agreements, Engineering Study/Stage Gate,
