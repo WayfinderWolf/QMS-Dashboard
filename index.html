@@ -3207,47 +3207,57 @@ const DEFAULT_KPI_RULES = [
   },
 ];
 
-// Count matching completed tasks + released infocards within a date range.
-// Released infocards are the primary completion signal for MC document work.
-// WF tasks cover formula reviews and other tasks not trackable in MC.
+// Count completions for a summary KPI rule.
+// Delegates to countGranularKPI() for the granular rules that map to this summary.
+// This ensures summary cards and the full KPI table always agree.
 function countKPITasks(rule, startDate, endDate){
-  // Count from WF/MC completed task imports
+  // Map summary rule IDs to their constituent granular rule IDs
+  const granularMap = {
+    'mc_artwork_upload': ['r_mcu', 'r_art5'],
+    'assembly_spec':     ['r_as'],
+    'fps_global':        ['fps'],
+    'change_control':    ['cc', 'capa'],
+  };
+  const granularIds = granularMap[rule.id] || [];
+  if(granularIds.length){
+    return granularIds.reduce((sum, gid) => {
+      const gRule = GRANULAR_KPI_RULES.find(r => r.id === gid);
+      return sum + (gRule ? countGranularKPI(gRule, startDate, endDate) : 0);
+    }, 0);
+  }
+  // Fallback: use original WF task matching for rules with no granular equivalent
   const allT = [
     ...(state.wfData?.tasks || []),
     ...(state.mcCompletedData?.tasks || []),
     ...(state.mcData?.docTasks || []).filter(t => t.status === 'completed'),
   ];
-  const taskCount = allT.filter(t => {
+  return allT.filter(t => {
     if(!rule.matchFn(t)) return false;
     if(t.status !== 'completed') return false;
     const d = new Date(t.completedDate || t.queuedDate || 0);
     return d >= startDate && d <= endDate;
   }).length;
-
-  // Count from released infocards — primary completion signal for MC documents
-  // Match by kpiId or by category+rule alignment
-  const infocardCount = (state.infocardData?.items || []).filter(i => {
-    if(!i.tracked) return false;
-    if(!i.releaseDate) return false;
-    const d = new Date(i.releaseDate);
-    if(d < startDate || d > endDate) return false;
-    // Match infocard to KPI rule by kpiId prefix or direct rule mapping
-    return matchInfocardToRule(i, rule);
-  }).length;
-
-  return taskCount + infocardCount;
 }
 
-// Map a released infocard to a KPI rule
-function matchInfocardToRule(infocard, rule){
-  const id = rule.id;
-  const kpi = infocard.kpiId;
-  // Direct mappings from INFOCARD_TYPE_MAP kpiIds to KPI rule ids
-  if(id === 'mc_artwork_upload') return kpi === 'mcu' || kpi === 'art5';
-  if(id === 'assembly_spec')     return kpi === 'as';
-  if(id === 'fps_global')        return kpi === 'fps' || kpi === 'fpsr' || kpi === 'ing';
-  if(id === 'change_control')    return kpi === 'cc' || kpi === 'capa';
-  return false;
+// Count by person for summary rules — also delegates to granular engine
+function countKPIByPersonSummary(rule, startDate, endDate){
+  const granularMap = {
+    'mc_artwork_upload': ['r_mcu', 'r_art5'],
+    'assembly_spec':     ['r_as'],
+    'fps_global':        ['fps'],
+    'change_control':    ['cc', 'capa'],
+  };
+  const granularIds = granularMap[rule.id] || [];
+  const byPerson = {};
+  granularIds.forEach(gid => {
+    const gRule = GRANULAR_KPI_RULES.find(r => r.id === gid);
+    if(!gRule) return;
+    const gByP = countGranularKPIByPerson(gRule, startDate, endDate);
+    Object.entries(gByP).forEach(([name, count]) => {
+      byPerson[name] = (byPerson[name] || 0) + count;
+    });
+  });
+  return byPerson;
 }
 
 // Get this week's date range (Mon-Sun)
@@ -3397,7 +3407,7 @@ function exportView(){
     const { start, end } = thisWeekRange();
     const rows = rules.map(rule => {
       const actual = countKPITasks(rule, start, end);
-      const byP    = countKPIByPerson(rule, start, end);
+      const byP    = countKPIByPersonSummary(rule, start, end);
       return {
         KPI: rule.label,
         Category: rule.category,
