@@ -1190,25 +1190,26 @@ function applyTeamFilter(t){
   return true;
 }
 
-// Calculate the 6 KPI values shown on the Team Overview cards.
+// Calculate KPI values shown on the Team Overview cards.
 // Uses tasksForPeriod() so values respond to the period toggle.
-// activeWorkflows counts MC workflow templates with enabled:true.
-// pendingApproval counts active MC tasks at an approval step.
+// totalCompleted includes released infocards from this week.
 function getKPIs(){
   const tasks = tasksForPeriod();
   const now = new Date(); now.setHours(0,0,0,0);
-  const od = t => t.status!=='completed' && t.dueDate && new Date(t.dueDate)<now;
+  const od = t => t.status!=='completed' && (t.dueDate||t.plannedStart) && new Date(t.dueDate||t.plannedStart)<now;
+
+  // Released infocards this week count as completions
+  const { start: wkStart, end: wkEnd } = thisWeekRange();
+  const infocardCompletions = (state.infocardData?.items||[]).filter(i=>
+    i.tracked && i.releaseDate &&
+    new Date(i.releaseDate)>=wkStart && new Date(i.releaseDate)<=wkEnd
+  ).length;
+
   return {
     totalPending:   tasks.filter(t=>t.status==='pending'||t.status==='in_progress').length,
-    totalCompleted: tasks.filter(t=>t.status==='completed').length,
+    totalCompleted: tasks.filter(t=>t.status==='completed').length + infocardCompletions,
     overdueCount:   tasks.filter(od).length,
-    // Active workflows: MC enabled workflows (templates with enabled:true from the API)
-    activeWorkflows:(state.mcData?.workflows||[]).filter(w=>w.enabled===true||w.status==='active'||w.status==='ACTIVE').length,
     wfProjects:     (state.wfData?.projects||[]).filter(p=>p.status==='in_progress').length,
-    // Pending approval: pull from full active MC queue regardless of period, match approval type
-    pendingApproval:(state.mcData?.docTasks||[]).filter(t=>
-      t.status!=='completed' && /approv/i.test(t.type||t.stepName||'')
-    ).length,
   };
 }
 
@@ -1298,15 +1299,22 @@ function snapshotHistory(){
   const kpi = getKPIs();
   const today = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'});
   const allT = allTasks();
-  const mcCompleted  = (state.mcCompletedData?.tasks||[]).length;
-  const allCompleted = allT.filter(t=>t.status==='completed').length + mcCompleted;
+  const mcCompleted       = (state.mcCompletedData?.tasks||[]).length;
+  const wfCompleted       = allT.filter(t=>t.status==='completed').length;
+  // Count released infocards this week as completions for the Trends chart
+  const { start: wkStart, end: wkEnd } = thisWeekRange();
+  const infocardCompleted = (state.infocardData?.items||[]).filter(i=>
+    i.tracked && i.releaseDate &&
+    new Date(i.releaseDate)>=wkStart && new Date(i.releaseDate)<=wkEnd
+  ).length;
+  const allCompleted = wfCompleted + mcCompleted + infocardCompleted;
   const snap = {
     date:today,
     docCompleted: allCompleted,
     docPending:   allT.filter(t=>t.status!=='completed').length,
     overdueCount: kpi.overdueCount,
     wfTaskCount:  (state.wfData?.tasks||[]).length + (state.wfData?.projects||[]).length,
-    real: true,   // mark as real data
+    real: true,
   };
 
   // If this is the first real snapshot, purge all demo snapshots that preceded it
@@ -1493,11 +1501,7 @@ function renderTeam(){
       <div class="status-dot ${state.wfData?'green':'yellow'}"></div>
       Workfront ${state.wfData ? 'imported ✓' : 'not imported'}
     </div>
-    <span class="status-sep">·</span>
-    <div class="status-item">
-      <div class="status-dot ${kpi.activeWorkflows>0?'green':'yellow'}"></div>
-      ${kpi.activeWorkflows} active workflows
-    </div>
+
   </div>
 
   <div class="kpi-grid">
@@ -1517,19 +1521,14 @@ function renderTeam(){
       <div class="kpi-delta ${kpi.overdueCount>0?'down':'up'}">${kpi.overdueCount>0?'needs attention':'all on track'}</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">Active Workflows</div>
-      <div class="kpi-value" style="color:var(--purple)">${kpi.activeWorkflows}</div>
-      <div class="kpi-delta neutral">MasterControl</div>
+      <div class="kpi-label">Released This Week</div>
+      <div class="kpi-value" style="color:var(--purple)">${(state.infocardData?.items||[]).filter(i=>i.tracked&&i.releaseDate&&new Date(i.releaseDate)>=wkStart&&new Date(i.releaseDate)<=wkEnd).length}</div>
+      <div class="kpi-delta neutral">MC infocards</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">WF Projects</div>
       <div class="kpi-value" style="color:var(--teal)">${kpi.wfProjects}</div>
       <div class="kpi-delta neutral">Workfront active</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Pending Approval</div>
-      <div class="kpi-value" style="color:var(--warning)">${kpi.pendingApproval}</div>
-      <div class="kpi-delta neutral">awaiting sign-off</div>
     </div>
   </div>
 
