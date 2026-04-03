@@ -1928,6 +1928,11 @@ function renderKPIs(){
 function renderMemberSchedule(name){
   const thisWeekStart = getWeekDates(0);
   const wk = getScheduleWeek(thisWeekStart);
+  const { start, end } = (() => {
+    const s = new Date(thisWeekStart);
+    const e = new Date(s); e.setDate(s.getDate()+6); e.setHours(23,59,59,0);
+    return { start: s, end: e };
+  })();
   const myTasks = wk.tasks.filter(t => {
     if(!t.assignee) return false;
     return t.assignee.split('/').some(p => normName(p.trim()) === normName(name));
@@ -1959,26 +1964,38 @@ function renderMemberSchedule(name){
     </div>
     ${wk.ptoNote ? `<div style="padding:6px 10px;background:var(--warning-bg);border-radius:var(--radius-sm);font-size:12px;color:var(--warning);margin-bottom:10px">⚠ ${wk.ptoNote}</div>` : ''}
     <table class="data-table">
-      <thead><tr><th>Task</th><th>Role</th><th style="text-align:right">Qty</th><th style="text-align:right">Est Hours</th><th>Notes</th></tr></thead>
+      <thead><tr>
+        <th>Task</th>
+        <th>Role</th>
+        <th style="text-align:right">Goal</th>
+        <th style="text-align:right">Done</th>
+        <th style="text-align:right">Est Hours</th>
+        <th>Notes</th>
+      </tr></thead>
       <tbody>
         ${myTasks.map(t => {
           const rt = ROUTER_TASKS.find(r => r.id === t.taskId);
           if(!rt) return '';
           const hrs = (t.qty * rt.hrs).toFixed(1);
-          const isKPI = ['mc_artwork_upload','assembly_spec','fps_global','change_control'].some(k => {
-            const rule = DEFAULT_KPI_RULES.find(r => r.id === k);
-            return rule && rule.matchFn({source:'WF Task',title:rt.name,workflow:rt.name});
-          });
-          return `<tr>
-            <td>
-              <span class="font-medium" style="font-size:12px">${rt.name}</span>
-              ${isKPI ? '<span class="badge badge-purple" style="margin-left:6px;font-size:10px">KPI</span>' : ''}
-            </td>
-            <td class="text-xs text-muted">${rt.role}</td>
-            <td style="text-align:right;font-weight:500">${t.qty}</td>
-            <td style="text-align:right;color:var(--text-muted);font-size:12px">${hrs}h</td>
-            <td class="text-xs text-muted">${t.notes||'—'}</td>
-          </tr>`;
+          // Find matching granular KPI rule to count completions
+          const gRule = getEffectiveGranularRules().find(r => r.id === rt.id || (r.infocardMatch && r.infocardMatch.test(rt.name)));
+          const done = gRule ? countGranularKPI(gRule, start, end) : 0;
+          const pct  = t.qty > 0 ? Math.round(done / t.qty * 100) : 0;
+          const color = pct >= 100 ? 'var(--success)' : pct >= 70 ? 'var(--warning)' : done > 0 ? 'var(--text-muted)' : 'var(--text-subtle)';
+          const isKPI = !!gRule;
+          return '<tr>'
+            + '<td><span style="font-size:12px;font-weight:500">'+rt.name+'</span>'
+            + (isKPI ? '<span class="badge badge-purple" style="margin-left:6px;font-size:10px">KPI</span>' : '')
+            + '</td>'
+            + '<td class="text-xs text-muted">'+rt.role+'</td>'
+            + '<td style="text-align:right;font-weight:500">'+t.qty+'</td>'
+            + '<td style="text-align:right">'
+            +   '<span style="font-size:14px;font-weight:600;color:'+color+'">'+done+'</span>'
+            +   (t.qty > 0 ? '<span style="font-size:10px;color:var(--text-subtle);margin-left:3px">'+pct+'%</span>' : '')
+            + '</td>'
+            + '<td style="text-align:right;color:var(--text-muted);font-size:12px">'+hrs+'h</td>'
+            + '<td class="text-xs text-muted">'+(t.notes||'—')+'</td>'
+            + '</tr>';
         }).join('')}
       </tbody>
     </table>
