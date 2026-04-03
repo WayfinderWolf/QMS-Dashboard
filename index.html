@@ -168,7 +168,7 @@
 <body>
 <div class="app">
   <nav class="sidebar">
-    <div class="sidebar-logo">QMS<span>Dashboard</span></div>
+    <div class="sidebar-logo">QMS <span>Dashboard</span></div>
     <div class="sidebar-section">Views</div>
     <div class="nav-item active" onclick="showView('team')" id="nav-team">
       <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="5" r="2"/><circle cx="11" cy="5" r="2"/><path d="M1 13c0-2.2 1.8-4 4-4h2m0 0h2c2.2 0 4 1.8 4 4"/></svg>
@@ -1835,7 +1835,14 @@ function renderKPISummary(){
 // ── FULL KPI PAGE ──
 function renderKPIs(){
   const rules = getKPIRules();
-  const { start: wkStart, end: wkEnd } = thisWeekRange();
+  // Active tab: 0=this week, 1=last week, 2=two weeks ago, 3=three weeks ago
+  const kpiWeekTab = parseInt(localStorage.getItem('kpi_week_tab')||'0');
+  const tabWeekStart = getWeekDates(-kpiWeekTab);
+  const { start: wkStart, end: wkEnd } = (() => {
+    const s = new Date(tabWeekStart);
+    const e = new Date(s); e.setDate(s.getDate()+6); e.setHours(23,59,59,0);
+    return { start: s, end: e };
+  })();
   const roll4 = rollingWeeksRange(4);
 
   return `
@@ -1844,11 +1851,21 @@ function renderKPIs(){
     <div class="page-subtitle">Weekly targets from Router baseline · ${wkStart.toLocaleDateString('en-US',{month:'short',day:'numeric'})} – ${wkEnd.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div></div>
     <div class="header-actions">
       <button class="btn btn-sm" onclick="exportView()">↓ Export CSV</button>
-      <button class="btn btn-sm btn-primary" onclick="openSettings()">Import Schedule</button>
     </div>
   </div>
 
-  ${!state.scheduleData ? `<div class="alert alert-info">Import this week's schedule file via Settings to see per-person KPI targets.</div>` : ''}
+  <!-- Week selector tabs -->
+  <div style="display:flex;gap:4px;margin-bottom:16px;background:var(--surface2);padding:4px;border-radius:var(--radius-sm);width:fit-content">
+    ${[0,1,2,3].map(i => {
+      const ws = getWeekDates(-i);
+      const we = new Date(ws); we.setDate(ws.getDate()+4);
+      const fmt = d => d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+      const lbl = i===0?'This week':i===1?'Last week':'Week of '+fmt(ws);
+      return '<button onclick="localStorage.setItem(\'kpi_week_tab\','+i+');render()" style="padding:6px 14px;font-size:13px;border-radius:var(--radius-sm);border:none;cursor:pointer;font-family:inherit;transition:all .15s;'
+        +(i===kpiWeekTab?'background:var(--surface);color:var(--text);font-weight:500;box-shadow:var(--shadow)':'background:transparent;color:var(--text-muted)')
+        +'"><span>'+lbl+'</span><br><span style="font-size:10px;opacity:.7">'+fmt(ws)+' – '+fmt(we)+'</span></button>';
+    }).join('')}
+  </div>
 
   <!-- Granular breakdown table — all Router task types -->
   <div class="full-row card">
@@ -2845,7 +2862,13 @@ async function syncInfocards(){
         //   "Master Template Draft" = template     ← exclude
         //   "Open"    = in-progress                ← exclude
         const status = (d.lifecycleStatus||'');
-        if(status !== 'Release') return;
+        const subtypeForFilter = d.infocardTypeName || d.infocardType || '';
+        const isChangeControlType = /^(Change Control|CAPA)/i.test(subtypeForFilter);
+        // Change Controls and CAPAs use a different lifecycle: Open → Effectiveness Check → Closed
+        // Regular documents use: Draft → Release → Archive
+        const isCompleted = status === 'Release'
+          || (isChangeControlType && (status === 'Closed' || status === 'Effectiveness Check'));
+        if(!isCompleted) return;
         // Debug: log what type fields exist on this record
         const typeVal = d.infocardTypeName || d.infocardType || d.type || d.subtype || '';
         if(Object.keys(_diag).length < 50){
@@ -2871,12 +2894,11 @@ async function syncInfocards(){
         if(authorRaw && !state.settings.members.some(m => normName(m) === normName(authorName))){
           unknownAuthors.add(authorRaw); // Track GUIDs we couldn't resolve
         }
-        const releaseDateNorm = normalizeDate(d.releaseDate);
+        // For date: use releaseDate first, then effectiveDate, then createDate as last resort
+        // Change Controls use effectiveDate when closed rather than releaseDate
+        const releaseDateNorm = normalizeDate(d.releaseDate || d.effectiveDate || d.createDate);
 
-        // Only keep infocards released within our 4-week tracking window.
-        // The vault change endpoint returns IDs that changed vaults — this includes
-        // old documents that were reorganized or moved, not just newly released ones.
-        // Filtering by releaseDate ensures we only show recently completed work.
+        // Only keep infocards completed within our 4-week tracking window
         const fourWeeksAgo = new Date(); fourWeeksAgo.setDate(fourWeeksAgo.getDate()-28);
         if(releaseDateNorm && new Date(releaseDateNorm) < fourWeeksAgo) return;
 
