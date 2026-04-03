@@ -1963,42 +1963,71 @@ function renderMemberSchedule(name){
       <button class="btn btn-sm" onclick="showView('schedule')">Edit schedule →</button>
     </div>
     ${wk.ptoNote ? `<div style="padding:6px 10px;background:var(--warning-bg);border-radius:var(--radius-sm);font-size:12px;color:var(--warning);margin-bottom:10px">⚠ ${wk.ptoNote}</div>` : ''}
-    <table class="data-table">
-      <thead><tr>
-        <th>Task</th>
-        <th>Role</th>
-        <th style="text-align:right">Goal</th>
-        <th style="text-align:right">Done</th>
-        <th style="text-align:right">Est Hours</th>
-        <th>Notes</th>
-      </tr></thead>
-      <tbody>
-        ${myTasks.map(t => {
+    ${(() => {
+        // Pre-compute all row data so we can total at the bottom
+        const rows = myTasks.map(t => {
           const rt = ROUTER_TASKS.find(r => r.id === t.taskId);
-          if(!rt) return '';
-          const hrs = (t.qty * rt.hrs).toFixed(1);
-          // Find matching granular KPI rule to count completions
-          const gRule = getEffectiveGranularRules().find(r => r.id === rt.id || (r.infocardMatch && r.infocardMatch.test(rt.name)));
-          const done = gRule ? countGranularKPI(gRule, start, end) : 0;
-          const pct  = t.qty > 0 ? Math.round(done / t.qty * 100) : 0;
-          const color = pct >= 100 ? 'var(--success)' : pct >= 70 ? 'var(--warning)' : done > 0 ? 'var(--text-muted)' : 'var(--text-subtle)';
-          const isKPI = !!gRule;
-          return '<tr>'
-            + '<td><span style="font-size:12px;font-weight:500">'+rt.name+'</span>'
-            + (isKPI ? '<span class="badge badge-purple" style="margin-left:6px;font-size:10px">KPI</span>' : '')
-            + '</td>'
-            + '<td class="text-xs text-muted">'+rt.role+'</td>'
-            + '<td style="text-align:right;font-weight:500">'+t.qty+'</td>'
-            + '<td style="text-align:right">'
-            +   '<span style="font-size:14px;font-weight:600;color:'+color+'">'+done+'</span>'
-            +   (t.qty > 0 ? '<span style="font-size:10px;color:var(--text-subtle);margin-left:3px">'+pct+'%</span>' : '')
-            + '</td>'
-            + '<td style="text-align:right;color:var(--text-muted);font-size:12px">'+hrs+'h</td>'
-            + '<td class="text-xs text-muted">'+(t.notes||'—')+'</td>'
-            + '</tr>';
-        }).join('')}
-      </tbody>
-    </table>
+          if(!rt) return null;
+          const gRule   = getEffectiveGranularRules().find(r => r.id === rt.id || (r.infocardMatch && r.infocardMatch.test(rt.name)));
+          const done    = gRule ? countGranularKPI(gRule, start, end) : 0;
+          const goal    = Number(t.qty) || 0;
+          const estHrs  = parseFloat((goal * rt.hrs).toFixed(2));
+          const actHrs  = parseFloat((done * rt.hrs).toFixed(2));
+          const pct     = goal > 0 ? Math.round(done / goal * 100) : 0;
+          const color   = pct >= 100 ? 'var(--success)' : pct >= 70 ? 'var(--warning)' : done > 0 ? 'var(--text-muted)' : 'var(--text-subtle)';
+          const isKPI   = !!gRule;
+          return { rt, t, done, goal, estHrs, actHrs, pct, color, isKPI };
+        }).filter(Boolean);
+
+        const totDone   = rows.reduce((s,r)=>s+r.done,0);
+        const totGoal   = rows.reduce((s,r)=>s+r.goal,0);
+        const totActHrs = rows.reduce((s,r)=>s+r.actHrs,0).toFixed(1);
+        const totEstHrs = rows.reduce((s,r)=>s+r.estHrs,0).toFixed(1);
+        const totPct    = totGoal > 0 ? Math.round(totDone/totGoal*100) : 0;
+        const totColor  = totPct>=100?'var(--success)':totPct>=70?'var(--warning)':'var(--text-muted)';
+
+        return '<table class="data-table">'
+          + '<thead><tr>'
+          + '<th>Task</th>'
+          + '<th>Role</th>'
+          + '<th style="text-align:right">Done</th>'
+          + '<th style="text-align:right">Goal</th>'
+          + '<th style="text-align:right">Actual Hrs</th>'
+          + '<th style="text-align:right">Est Hrs</th>'
+          + '<th>Notes</th>'
+          + '</tr></thead>'
+          + '<tbody>'
+          + rows.map(r =>
+              '<tr>'
+              + '<td><span style="font-size:12px;font-weight:500">'+r.rt.name+'</span>'
+              + (r.isKPI ? '<span class="badge badge-purple" style="margin-left:6px;font-size:10px">KPI</span>' : '')
+              + '</td>'
+              + '<td class="text-xs text-muted">'+r.rt.role+'</td>'
+              + '<td style="text-align:right">'
+              +   '<span style="font-size:13px;font-weight:600;color:'+r.color+'">'+r.done+'</span>'
+              +   (r.goal>0?'<span style="font-size:10px;color:var(--text-subtle);margin-left:3px">'+r.pct+'%</span>':'')
+              + '</td>'
+              + '<td style="text-align:right;font-weight:500">'+r.goal+'</td>'
+              + '<td style="text-align:right;font-size:12px;color:'+r.color+'">'+r.actHrs.toFixed(1)+'h</td>'
+              + '<td style="text-align:right;font-size:12px;color:var(--text-muted)">'+r.estHrs.toFixed(1)+'h</td>'
+              + '<td class="text-xs text-muted">'+(r.t.notes||'—')+'</td>'
+              + '</tr>'
+            ).join('')
+          + '</tbody>'
+          + '<tfoot>'
+          + '<tr style="border-top:2px solid var(--border-strong);font-weight:600">'
+          + '<td colspan="2" style="font-size:12px;color:var(--text-muted)">Total</td>'
+          + '<td style="text-align:right"><span style="color:'+totColor+'">'+totDone+'</span>'
+          +   (totGoal>0?'<span style="font-size:10px;color:var(--text-subtle);margin-left:3px">'+totPct+'%</span>':'')
+          + '</td>'
+          + '<td style="text-align:right">'+totGoal+'</td>'
+          + '<td style="text-align:right;color:'+totColor+'">'+totActHrs+'h</td>'
+          + '<td style="text-align:right;color:var(--text-muted)">'+totEstHrs+'h</td>'
+          + '<td></td>'
+          + '</tr>'
+          + '</tfoot>'
+          + '</table>';
+      })()}
   </div>`;
 }
 
