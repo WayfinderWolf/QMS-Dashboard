@@ -219,9 +219,21 @@
 
 <!-- SETTINGS MODAL -->
 <div class="modal-overlay hidden" id="settings-modal">
-  <div class="modal">
+  <div class="modal" style="max-width:820px">
     <div class="modal-title">Settings &amp; Data Import</div>
-    <div class="modal-subtitle">Configure MasterControl API and import Workfront data</div>
+
+    <!-- Settings tabs -->
+    <div style="display:flex;gap:2px;background:var(--surface2);padding:3px;border-radius:var(--radius-sm);margin-bottom:16px;width:fit-content">
+      <button id="stab-0" onclick="switchSettingsTab(0)" style="padding:5px 14px;font-size:12px;border-radius:var(--radius-sm);border:none;cursor:pointer;font-family:inherit;background:var(--surface);color:var(--text);font-weight:500">General</button>
+      <button id="stab-1" onclick="switchSettingsTab(1)" style="padding:5px 14px;font-size:12px;border-radius:var(--radius-sm);border:none;cursor:pointer;font-family:inherit;background:transparent;color:var(--text-muted)">Infocard Mappings</button>
+      <button id="stab-2" onclick="switchSettingsTab(2)" style="padding:5px 14px;font-size:12px;border-radius:var(--radius-sm);border:none;cursor:pointer;font-family:inherit;background:transparent;color:var(--text-muted)">KPI Rules</button>
+    </div>
+
+    <div id="stab-panel-0"><!-- General tab --></div>
+    <div id="stab-panel-1" style="display:none"><!-- Infocard Mappings tab --></div>
+    <div id="stab-panel-2" style="display:none"><!-- KPI Rules tab --></div>
+
+    <div id="stab-general-content">
 
     <div class="form-row">
       <label class="form-label">MasterControl Base URL</label>
@@ -300,6 +312,7 @@
       <div class="form-hint">If left blank, the dashboard will use the display name as-is for MC API calls.</div>
     </div>
 
+    </div><!-- end stab-general-content -->
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
       <button class="btn" onclick="closeSettings()">Cancel</button>
       <button class="btn btn-primary" onclick="saveSettings()">Save &amp; Sync</button>
@@ -1883,7 +1896,7 @@ function renderKPIs(){
         <th>Source</th>
       </tr></thead>
       <tbody>
-        ${GRANULAR_KPI_RULES.map(rule => {
+        ${getEffectiveGranularRules().filter(r=>!r.disabled).map(rule => {
           const actual   = countGranularKPI(rule, wkStart, wkEnd);
           const r4       = rollingWeeksRange(4);
           const rollAct  = countGranularKPI(rule, r4.start, r4.end);
@@ -2133,7 +2146,7 @@ function renderMemberInfocards(name){
       <table class="data-table">
         <thead><tr><th>Task Type</th><th style="text-align:right">This Week</th><th style="text-align:right">4-wk Avg</th><th>Source</th></tr></thead>
         <tbody>
-          ${GRANULAR_KPI_RULES.map(rule => {
+          ${getEffectiveGranularRules().filter(r=>!r.disabled).map(rule => {
             const { start: ws, end: we } = thisWeekRange();
             const r4 = rollingWeeksRange(4);
             const wkByP  = countGranularKPIByPerson(rule, ws, we);
@@ -2718,7 +2731,7 @@ const INFOCARD_TYPE_MAP = [
   { match: /^Foreign Market Managed$/i,        category:'Specifications',        kpiId:'g_fmm',  tracked:true  },
   { match: /^Job Description$/i,               category:'SOP/Work Instructions', kpiId:'man',    tracked:true  },
   // ── Specifications — Visible but not team KPI ─────────────────────
-  { match: /^3rd Party Mfg Pack Spec$/i,       category:'Specifications',        kpiId:null,     tracked:true  },
+  { match: /^3rd Party Mfg Pack Spec$/i,       category:'Specifications',        kpiId:'fps',    tracked:true  },
   { match: /^Oil Packaging Spec$/i,            category:'Specifications',        kpiId:null,     tracked:true  },
   { match: /^OL Packaging Spec$/i,             category:'Specifications',        kpiId:null,     tracked:true  },
   { match: /^PLF Good Testing Spec$/i,         category:'Specifications',        kpiId:null,     tracked:true  },
@@ -3065,6 +3078,7 @@ function getGranularTarget(rule){
 }
 
 function countGranularKPI(rule, startDate, endDate){
+  if(rule.disabled) return 0;
   let count = 0;
   if(rule.infocardMatch && !rule.noAuthor){
     count += (state.infocardData?.items||[]).filter(i=>{
@@ -3542,6 +3556,236 @@ function cycleTheme(){
   state.theme = order[(order.indexOf(cur)+1) % order.length];
   applyTheme();
   persist();
+}
+
+
+// ─────────────────────────────────────────────
+// SETTINGS TABS — Infocard Mappings & KPI Rules
+// ─────────────────────────────────────────────
+
+function switchSettingsTab(idx){
+  [0,1,2].forEach(i => {
+    const btn = document.getElementById('stab-'+i);
+    const general = document.getElementById('stab-general-content');
+    if(btn){
+      btn.style.background   = i===idx ? 'var(--surface)' : 'transparent';
+      btn.style.color        = i===idx ? 'var(--text)'    : 'var(--text-muted)';
+      btn.style.fontWeight   = i===idx ? '500'            : '400';
+    }
+    if(i===0 && general) general.style.display = idx===0 ? '' : 'none';
+  });
+  const p1 = document.getElementById('stab-panel-1');
+  const p2 = document.getElementById('stab-panel-2');
+  if(p1) p1.style.display = idx===1 ? '' : 'none';
+  if(p2) p2.style.display = idx===2 ? '' : 'none';
+  if(idx===1) renderInfocardMappingsEditor();
+  if(idx===2) renderKPIRulesEditor();
+}
+
+// ── INFOCARD TYPE MAPPINGS EDITOR ──────────────────
+// Returns user-customized mappings merged over the built-in defaults
+function getUserInfocardMappings(){
+  return state.settings.infocardMappings || [];
+}
+
+// Get effective map: user overrides take precedence over INFOCARD_TYPE_MAP defaults
+function getEffectiveInfocardMap(){
+  const user = getUserInfocardMappings();
+  if(!user.length) return INFOCARD_TYPE_MAP.map(e => ({
+    matchStr: e.match.source,
+    category: e.category,
+    kpiId:    e.kpiId || '',
+    tracked:  e.tracked !== false,
+  }));
+  return user;
+}
+
+function renderInfocardMappingsEditor(){
+  const el = document.getElementById('stab-panel-1');
+  if(!el) return;
+  const mappings = getEffectiveInfocardMap();
+  const categories = ['Artwork','Specifications','SOP/Work Instructions','Change Control'];
+  const kpiOptions = ['','r_mcu','r_art5','g_ots','g_bs','g_pbs','g_cs','g_fmm','fps','r_ing','r_as','fpsr','r_art5','man','sop','frm','cc','capa'];
+
+  el.innerHTML = `
+  <div style="margin-bottom:10px;font-size:12px;color:var(--text-muted)">
+    Define how MC infocard subtypes map to dashboard categories and KPI rules.
+    Changes are saved immediately and override the built-in defaults.
+  </div>
+  <table class="data-table" id="imap-table">
+    <thead><tr>
+      <th>Subtype Name (exact MC value)</th>
+      <th>Category</th>
+      <th>KPI Rule</th>
+      <th>Tracked</th>
+      <th></th>
+    </tr></thead>
+    <tbody>
+      ${mappings.map((m,i) => `
+      <tr id="imap-row-${i}">
+        <td><input value="${m.matchStr||''}" id="imap-match-${i}"
+          style="width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text);font-size:12px;font-family:inherit"
+          onchange="saveImapRow(${i})"></td>
+        <td><select id="imap-cat-${i}" onchange="saveImapRow(${i})"
+          style="width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text);font-size:12px;font-family:inherit">
+          <option value="">— none —</option>
+          ${categories.map(c=>`<option value="${c}" ${m.category===c?'selected':''}>${c}</option>`).join('')}
+        </select></td>
+        <td><select id="imap-kpi-${i}" onchange="saveImapRow(${i})"
+          style="width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text);font-size:12px;font-family:inherit">
+          ${kpiOptions.map(k=>`<option value="${k}" ${(m.kpiId||'')===(k||'')?'selected':''}>${k||'— none —'}</option>`).join('')}
+        </select></td>
+        <td style="text-align:center"><input type="checkbox" ${m.tracked!==false?'checked':''} id="imap-tracked-${i}"
+          onchange="saveImapRow(${i})" style="cursor:pointer;accent-color:var(--accent)"></td>
+        <td><button onclick="deleteImapRow(${i})" style="background:none;border:none;cursor:pointer;color:var(--danger);font-size:14px">✕</button></td>
+      </tr>`).join('')}
+    </tbody>
+  </table>
+  <button onclick="addImapRow()" class="btn btn-sm" style="margin-top:8px">+ Add subtype</button>
+  <div style="margin-top:8px;font-size:11px;color:var(--text-subtle)">
+    Known subtypes from last sync:
+    ${Object.keys(window._diag?.infocard_subtypes_seen||{}).map(s=>`<span style="margin-right:6px;cursor:pointer;color:var(--accent)" onclick="addImapRowWithName('${s}')">${s}</span>`).join('')}
+  </div>`;
+}
+
+function saveImapRow(i){
+  const mappings = getEffectiveInfocardMap();
+  mappings[i] = {
+    matchStr: document.getElementById('imap-match-'+i)?.value || '',
+    category: document.getElementById('imap-cat-'+i)?.value   || '',
+    kpiId:    document.getElementById('imap-kpi-'+i)?.value   || '',
+    tracked:  document.getElementById('imap-tracked-'+i)?.checked !== false,
+  };
+  state.settings.infocardMappings = mappings;
+  persist();
+}
+
+function deleteImapRow(i){
+  const mappings = getEffectiveInfocardMap();
+  mappings.splice(i, 1);
+  state.settings.infocardMappings = mappings;
+  persist();
+  renderInfocardMappingsEditor();
+}
+
+function addImapRow(name=''){
+  const mappings = getEffectiveInfocardMap();
+  mappings.push({ matchStr: name, category:'', kpiId:'', tracked: true });
+  state.settings.infocardMappings = mappings;
+  persist();
+  renderInfocardMappingsEditor();
+  // Focus the new row's input
+  setTimeout(()=>{
+    const inp = document.getElementById('imap-match-'+(mappings.length-1));
+    if(inp){ inp.focus(); inp.select(); }
+  }, 50);
+}
+
+function addImapRowWithName(name){ addImapRow(name); }
+
+// Override classifyInfocard to use user mappings when available
+const _classifyInfocardBuiltin = classifyInfocard;
+function classifyInfocard(typeName){
+  if(!typeName) return null;
+  const user = getUserInfocardMappings();
+  if(user.length){
+    const match = user.find(m => {
+      try{ return new RegExp(m.matchStr, 'i').test(typeName); }
+      catch(e){ return typeName === m.matchStr; }
+    });
+    if(match) return { category: match.category, kpiId: match.kpiId||null, tracked: match.tracked!==false };
+    return null;
+  }
+  return _classifyInfocardBuiltin(typeName);
+}
+
+// ── KPI RULES EDITOR ──────────────────────────────
+function getUserKPIRules(){
+  return state.settings.kpiRuleOverrides || [];
+}
+
+function getEffectiveGranularRules(){
+  const overrides = getUserKPIRules();
+  if(!overrides.length) return GRANULAR_KPI_RULES;
+  // Apply user overrides on top of defaults
+  return GRANULAR_KPI_RULES.map(r => {
+    const ov = overrides.find(o => o.id === r.id);
+    return ov ? { ...r, ...ov } : r;
+  });
+}
+
+function renderKPIRulesEditor(){
+  const el = document.getElementById('stab-panel-2');
+  if(!el) return;
+  const rules = getEffectiveGranularRules();
+  const overrides = getUserKPIRules();
+
+  el.innerHTML = `
+  <div style="margin-bottom:10px;font-size:12px;color:var(--text-muted)">
+    Adjust KPI labels, weekly targets, and estimated hours per task.
+    Changes override the Router baseline and persist across sessions.
+  </div>
+  <table class="data-table">
+    <thead><tr>
+      <th>Task Type</th>
+      <th>Role</th>
+      <th style="text-align:right">Target/wk</th>
+      <th style="text-align:right">Hrs/task</th>
+      <th>Active</th>
+      <th></th>
+    </tr></thead>
+    <tbody>
+      ${rules.map((r,i) => {
+        const hasOverride = overrides.some(o=>o.id===r.id);
+        return `<tr style="${r.disabled?'opacity:.5':''}">
+          <td>
+            <div style="font-size:12px;font-weight:500">${r.label}</div>
+            <div style="font-size:10px;color:var(--text-subtle)">${r.id}</div>
+          </td>
+          <td class="text-xs text-muted">${r.role}</td>
+          <td><input type="number" value="${r.target}" min="0" step="0.25" id="kpi-target-${r.id}"
+            onchange="saveKPIOverride('${r.id}')"
+            style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text);font-size:12px;font-family:inherit;text-align:right"></td>
+          <td><input type="number" value="${r.hrs}" min="0" step="0.05" id="kpi-hrs-${r.id}"
+            onchange="saveKPIOverride('${r.id}')"
+            style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text);font-size:12px;font-family:inherit;text-align:right"></td>
+          <td style="text-align:center"><input type="checkbox" ${!r.disabled?'checked':''} id="kpi-active-${r.id}"
+            onchange="saveKPIOverride('${r.id}')" style="cursor:pointer;accent-color:var(--accent)"></td>
+          <td>${hasOverride?`<button onclick="resetKPIOverride('${r.id}')" class="btn btn-sm" style="font-size:10px;color:var(--text-muted)">Reset</button>`:''}</td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>
+  <button onclick="resetAllKPIOverrides()" class="btn btn-sm" style="margin-top:8px;color:var(--danger)">Reset all to Router defaults</button>`;
+}
+
+function saveKPIOverride(id){
+  const overrides = getUserKPIRules();
+  const existing = overrides.find(o=>o.id===id) || { id };
+  const idx = overrides.indexOf(existing);
+
+  const target   = parseFloat(document.getElementById('kpi-target-'+id)?.value) || 0;
+  const hrs      = parseFloat(document.getElementById('kpi-hrs-'+id)?.value) || 0;
+  const disabled = !(document.getElementById('kpi-active-'+id)?.checked);
+
+  const updated = { ...existing, id, target, hrs, disabled };
+  if(idx >= 0) overrides[idx] = updated;
+  else overrides.push(updated);
+
+  state.settings.kpiRuleOverrides = overrides;
+  persist();
+}
+
+function resetKPIOverride(id){
+  state.settings.kpiRuleOverrides = (state.settings.kpiRuleOverrides||[]).filter(o=>o.id!==id);
+  persist();
+  renderKPIRulesEditor();
+}
+
+function resetAllKPIOverrides(){
+  state.settings.kpiRuleOverrides = [];
+  persist();
+  renderKPIRulesEditor();
 }
 
 // ─────────────────────────────────────────────
