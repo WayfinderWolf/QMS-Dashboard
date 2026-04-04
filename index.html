@@ -245,46 +245,7 @@
       <input class="form-input" type="password" id="mc-token" placeholder="Paste your MC API key" />
       <div class="form-hint">Stored in localStorage only — never leaves your browser except to call MC directly.</div>
     </div>
-    <div class="form-row">
-      <label class="form-label">Auto-sync interval</label>
-      <select class="form-input" id="mc-interval">
-        <option value="5">Every 5 min</option>
-        <option value="15" selected>Every 15 min</option>
-        <option value="30">Every 30 min</option>
-        <option value="60">Every hour</option>
-      </select>
-    </div>
 
-    <div class="divider"></div>
-
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
-      <div>
-        <div class="card-title" style="margin-bottom:6px">Workfront Tasks (.xlsx)</div>
-        <div class="drop-zone" id="drop-zone-wf" onclick="document.getElementById('file-wf').click()">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-subtle)" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <div class="drop-zone-text">Drop Workfront export here</div>
-          <div class="drop-zone-sub">Task Name · Assigned To · Due Date · Status · Priority</div>
-        </div>
-        <input type="file" id="file-wf" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleWFImport(this.files[0])">
-        <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-          <div id="wf-status" class="text-sm text-muted hidden" style="flex:1"></div>
-          <button class="btn btn-sm hidden" id="wf-clear" onclick="clearImport('wf')" style="color:var(--danger);border-color:var(--danger);flex-shrink:0">✕ Clear</button>
-        </div>
-      </div>
-      <div>
-        <div class="card-title" style="margin-bottom:6px">MC Completed Tasks (.xlsx)</div>
-        <div class="drop-zone" id="drop-zone-mc" onclick="document.getElementById('file-mc').click()">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-subtle)" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <div class="drop-zone-text">Drop MC task history export here</div>
-          <div class="drop-zone-sub">Task Name · Completed By · Completion Date · Route</div>
-        </div>
-        <input type="file" id="file-mc" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleMCCompletedImport(this.files[0])">
-        <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-          <div id="mc-status" class="text-sm text-muted hidden" style="flex:1"></div>
-          <button class="btn btn-sm hidden" id="mc-clear" onclick="clearImport('mc')" style="color:var(--danger);border-color:var(--danger);flex-shrink:0">✕ Clear</button>
-        </div>
-      </div>
-    </div>
 
 
     <div class="divider"></div>
@@ -851,9 +812,7 @@ async function doSync(){
 
 // Auto-sync loop
 function startAutoSync(){
-  setInterval(()=>{
-    if(state.settings.mcUrl && state.settings.mcToken && !state.syncing) syncMasterControl();
-  }, (state.settings.mcInterval||15)*60*1000);
+  // Auto-sync disabled — sync is manual only via the Sync button
 }
 
 // ─────────────────────────────────────────────
