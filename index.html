@@ -4,7 +4,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>QMS Operations Dashboard</title>
+<title>QMS Dashboard</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -2674,7 +2674,6 @@ function closeSettings(){ document.getElementById('settings-modal').classList.ad
 function saveSettings(){
   state.settings.mcUrl    = document.getElementById('mc-url').value.trim().replace(/\/$/,'');
   state.settings.mcToken  = document.getElementById('mc-token').value.trim();
-  state.settings.mcInterval= parseInt(document.getElementById('mc-interval').value)||15;
   const raw = document.getElementById('team-members').value;
   state.settings.members  = raw.split(',').map(s=>s.trim()).filter(Boolean);
   // Parse author GUID mappings for infocard author resolution
