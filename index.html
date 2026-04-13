@@ -4,7 +4,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>QMS Dashboard</title>
+<title>QMS Operations Dashboard</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -168,7 +168,7 @@
 <body>
 <div class="app">
   <nav class="sidebar">
-    <div class="sidebar-logo">QMS <span>Dashboard</span></div>
+    <div class="sidebar-logo">QMS Ops <span>Dashboard</span></div>
     <div class="sidebar-section">Views</div>
     <div class="nav-item active" onclick="showView('team')" id="nav-team">
       <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="5" r="2"/><circle cx="11" cy="5" r="2"/><path d="M1 13c0-2.2 1.8-4 4-4h2m0 0h2c2.2 0 4 1.8 4 4"/></svg>
@@ -1875,8 +1875,8 @@ function renderKPIs(){
 
     <!-- Metric 1: Tasks Started -->
     <div class="card">
-      <div class="card-title">Tasks Started This Week</div>
-      <div class="card-subtitle">Unique packets launched · MC launchdate</div>
+      <div class="card-title">Tasks Started</div>
+      <div class="card-subtitle">Unique packets launched · MC launchdate · ${weekLabel(tabWeekStart)}</div>
       <div style="margin-top:10px">
         ${(() => {
           const started = getTasksStarted(wkStart, wkEnd);
@@ -1897,10 +1897,10 @@ function renderKPIs(){
     <!-- Metric 2: MC Cycle Time -->
     <div class="card">
       <div class="card-title">MC Cycle Time</div>
-      <div class="card-subtitle">createDate → releaseDate · SLA: ${CYCLE_SLA_DAYS} days</div>
+      <div class="card-subtitle">createDate → releaseDate · SLA: ${CYCLE_SLA_DAYS} days · ${weekLabel(tabWeekStart)}</div>
       <div style="margin-top:10px">
         ${(() => {
-          const dist = cycleTimeDistribution();
+          const dist = cycleTimeDistribution(wkStart, wkEnd);
           if(!dist.total) return '<div class="text-sm text-muted">No cycle time data yet — needs both createDate and releaseDate on infocards</div>';
           const avgColor = dist.avg <= CYCLE_SLA_DAYS ? 'var(--success)' : dist.avg <= 60 ? 'var(--warning)' : 'var(--danger)';
           return '<div style="font-size:28px;font-weight:600;color:'+avgColor+'">'+(dist.avg||'—')+'<span style="font-size:14px;font-weight:400;color:var(--text-muted)"> days avg</span></div>'
@@ -1917,10 +1917,10 @@ function renderKPIs(){
     <!-- Metric 3: WF Cycle Time -->
     <div class="card">
       <div class="card-title">WF Task Cycle Time</div>
-      <div class="card-subtitle">Actual Start → Completion · spec tasks only</div>
+      <div class="card-subtitle">Actual Start → Completion · spec tasks · ${weekLabel(tabWeekStart)}</div>
       <div style="margin-top:10px">
         ${(() => {
-          const dist = wfCycleTimeDistribution();
+          const dist = wfCycleTimeDistribution(wkStart, wkEnd);
           if(!dist.total) return '<div class="text-sm text-muted">No WF cycle data — needs Actual Start Date and Completion Date in import</div>';
           const avgColor = dist.avg <= 30 ? 'var(--success)' : dist.avg <= 60 ? 'var(--warning)' : 'var(--danger)';
           return '<div style="font-size:28px;font-weight:600;color:'+avgColor+'">'+(dist.avg||'—')+'<span style="font-size:14px;font-weight:400;color:var(--text-muted)"> days avg</span></div>'
@@ -2109,7 +2109,7 @@ function renderMemberSchedule(name){
           + '<thead><tr>'
           + '<th>Task</th>'
           + '<th>Role</th>'
-          + '<th style="text-align:right">Done</th>'
+          + '<th style="text-align:right">Started</th>'
           + '<th style="text-align:right">Goal</th>'
           + '<th style="text-align:right">Actual Hrs</th>'
           + '<th style="text-align:right">Est Hrs</th>'
@@ -3523,8 +3523,13 @@ function avgCycleTime(authorName){
   return Math.round(times.reduce((s,t) => s+t.cycleDays, 0) / times.length);
 }
 
-function cycleTimeDistribution(){
-  const all = getCycleTimes();
+function cycleTimeDistribution(startDate, endDate){
+  // Filter to infocards released within the given week
+  const all = getCycleTimes().filter(i => {
+    if(!startDate || !endDate) return true;
+    const d = new Date(i.releaseDate);
+    return d >= startDate && d <= endDate;
+  });
   return {
     total:   all.length,
     onTime:  all.filter(t=>t.slaStatus==='green').length,
@@ -3561,8 +3566,13 @@ function avgWFCycleTime(authorName){
   return Math.round(times.reduce((s,t)=>s+t.cycleDays,0)/times.length);
 }
 
-function wfCycleTimeDistribution(){
-  const all = getWFCycleTimes();
+function wfCycleTimeDistribution(startDate, endDate){
+  // Filter to tasks completed within the given week
+  const all = getWFCycleTimes().filter(t => {
+    if(!startDate || !endDate) return true;
+    const d = new Date(t.completedDate);
+    return d >= startDate && d <= endDate;
+  });
   return {
     total: all.length,
     avg:   all.length ? Math.round(all.reduce((s,t)=>s+t.cycleDays,0)/all.length) : null,
