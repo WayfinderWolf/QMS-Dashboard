@@ -2766,6 +2766,17 @@ const INFOCARD_SUBTYPES = {
 
 function classifyInfocard(typeName){
   if(!typeName) return null;
+  // Check user-defined mappings first (from Settings → Infocard Mappings)
+  const user = getUserInfocardMappings();
+  if(user.length){
+    const match = user.find(m => {
+      try{ return new RegExp(m.matchStr, 'i').test(typeName); }
+      catch(e){ return typeName === m.matchStr; }
+    });
+    if(match) return { category: match.category, kpiId: match.kpiId||null, tracked: match.tracked!==false };
+    return null; // User has mappings defined — don't fall through to defaults
+  }
+  // Fall back to built-in type map
   const entry = INFOCARD_TYPE_MAP.find(e => e.match.test(typeName));
   return entry || null;
 }
@@ -2810,19 +2821,26 @@ async function syncInfocards(){
 
   // Merge current week IDs with cached previous weeks
   const weekCache = state.infocardData?.weekCache || {};
-  // Also fetch previous 3 weeks if not cached yet
+  // For prior weeks: fetch only the IDs that changed in that specific week
+  // by using startDate = week start and filtering by the week end date
+  // We track which weeks are already cached to avoid re-fetching
   for(let w=1; w<=3; w++){
     const wkStart = getWeekDates(-w);
+    const wkEnd   = new Date(wkStart); wkEnd.setDate(wkStart.getDate()+7);
     const cacheKey = weekKey(wkStart);
     if(!weekCache[cacheKey]){
       try{
+        // Fetch from week start — gives IDs that changed since that Monday
+        // We'll filter by releaseDate in the detail step to scope to that week
         const wkStr = wkStart.toISOString().slice(0,19);
+        const prevStr = new Date(wkStart.getTime()-7*86400000).toISOString().slice(0,19);
         const res = await mcFetch(
           `/restapi/v1/documents/search/infoCardVaultChange?startDate=${encodeURIComponent(wkStr)}`
         );
-        // We'll fetch details for this week below — mark as pending
-        const ids = Array.isArray(res) ? res : (res.items||res.results||res.ids||[]);
-        weekCache[cacheKey] = { ids, items: null }; // items=null means not yet fetched
+        const allIds = Array.isArray(res) ? res : (res.items||res.results||res.ids||[]);
+        // Only take the first 300 IDs per prior week to keep fetch manageable
+        const ids = allIds.slice(0, 300);
+        weekCache[cacheKey] = { ids, items: null };
         _diag[`infocard_prior_week_${w}_ids`] = ids.length;
       } catch(e){ /* skip */ }
     }
@@ -3687,21 +3705,8 @@ function addImapRow(name=''){
 
 function addImapRowWithName(name){ addImapRow(name); }
 
-// Override classifyInfocard to use user mappings when available
-const _classifyInfocardBuiltin = classifyInfocard;
-function classifyInfocard(typeName){
-  if(!typeName) return null;
-  const user = getUserInfocardMappings();
-  if(user.length){
-    const match = user.find(m => {
-      try{ return new RegExp(m.matchStr, 'i').test(typeName); }
-      catch(e){ return typeName === m.matchStr; }
-    });
-    if(match) return { category: match.category, kpiId: match.kpiId||null, tracked: match.tracked!==false };
-    return null;
-  }
-  return _classifyInfocardBuiltin(typeName);
-}
+// classifyInfocard is defined earlier and now checks user mappings via getUserInfocardMappings()
+// No override needed — the original function was updated to check user mappings first
 
 // ── KPI RULES EDITOR ──────────────────────────────
 function getUserKPIRules(){
