@@ -1808,7 +1808,8 @@ function renderKPISummary(){
 function renderKPIs(){
   const rules = getKPIRules();
   // Active tab: 0=this week, 1=last week, 2=two weeks ago, 3=three weeks ago
-  const kpiWeekTab = parseInt(localStorage.getItem('kpi_week_tab')||'0');
+  // Default to current week — resets each time you navigate to the KPI page
+  const kpiWeekTab = parseInt(sessionStorage.getItem('kpi_week_tab')||'0');
   const tabWeekStart = getWeekDates(-kpiWeekTab);
   const { start: wkStart, end: wkEnd } = (() => {
     const s = new Date(tabWeekStart);
@@ -1833,7 +1834,7 @@ function renderKPIs(){
       const we = new Date(ws); we.setDate(ws.getDate()+4);
       const fmt = d => d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
       const lbl = i===0?'This week':i===1?'Last week':'Week of '+fmt(ws);
-      return '<button onclick="localStorage.setItem(\'kpi_week_tab\','+i+');render()" style="padding:6px 14px;font-size:13px;border-radius:var(--radius-sm);border:none;cursor:pointer;font-family:inherit;transition:all .15s;'
+      return '<button onclick="sessionStorage.setItem(\'kpi_week_tab\','+i+');render()" style="padding:6px 14px;font-size:13px;border-radius:var(--radius-sm);border:none;cursor:pointer;font-family:inherit;transition:all .15s;'
         +(i===kpiWeekTab?'background:var(--surface);color:var(--text);font-weight:500;box-shadow:var(--shadow)':'background:transparent;color:var(--text-muted)')
         +'"><span>'+lbl+'</span><br><span style="font-size:10px;opacity:.7">'+fmt(ws)+' – '+fmt(we)+'</span></button>';
     }).join('')}
@@ -2821,27 +2822,36 @@ async function syncInfocards(){
 
   // Merge current week IDs with cached previous weeks
   const weekCache = state.infocardData?.weekCache || {};
-  // For prior weeks: fetch only the IDs that changed in that specific week
-  // by using startDate = week start and filtering by the week end date
-  // We track which weeks are already cached to avoid re-fetching
+  // Fetch prior 3 weeks — get ONLY the delta for each week
+  // by fetching from week start to week end (not cumulative from week start to now)
+  // This keeps each week at ~200-500 IDs instead of 1400-2700 cumulative
   for(let w=1; w<=3; w++){
-    const wkStart = getWeekDates(-w);
-    const wkEnd   = new Date(wkStart); wkEnd.setDate(wkStart.getDate()+7);
+    const wkStart  = getWeekDates(-w);
+    const wkEnd    = getWeekDates(-(w-1)); // start of the following week = end of this week
     const cacheKey = weekKey(wkStart);
     if(!weekCache[cacheKey]){
       try{
-        // Fetch from week start — gives IDs that changed since that Monday
-        // We'll filter by releaseDate in the detail step to scope to that week
-        const wkStr = wkStart.toISOString().slice(0,19);
-        const prevStr = new Date(wkStart.getTime()-7*86400000).toISOString().slice(0,19);
+        // Fetch IDs that changed since this week's Monday
+        const wkStr  = wkStart.toISOString().slice(0,19);
+        const wkEndStr = wkEnd.toISOString().slice(0,19);
         const res = await mcFetch(
           `/restapi/v1/documents/search/infoCardVaultChange?startDate=${encodeURIComponent(wkStr)}`
         );
         const allIds = Array.isArray(res) ? res : (res.items||res.results||res.ids||[]);
-        // Only take the first 300 IDs per prior week to keep fetch manageable
-        const ids = allIds.slice(0, 300);
-        weekCache[cacheKey] = { ids, items: null };
-        _diag[`infocard_prior_week_${w}_ids`] = ids.length;
+        // Get IDs from the PREVIOUS week's fetch to subtract (remove overlap)
+        const prevCacheKey = weekKey(getWeekDates(-(w+1)));
+        const prevIds = new Set((weekCache[prevCacheKey]?.ids||[]).map(id =>
+          typeof id==='string'?id:(id.infocardId||id.id||String(id))
+        ));
+        // Only keep IDs that weren't in the previous (older) week's fetch
+        // These are the IDs that are NEW since this week's Monday
+        const deltaIds = allIds.filter(id => {
+          const idStr = typeof id==='string'?id:(id.infocardId||id.id||String(id));
+          return !prevIds.has(idStr);
+        });
+        weekCache[cacheKey] = { ids: deltaIds, items: null };
+        _diag[`infocard_prior_week_${w}_ids`] = deltaIds.length;
+        _diag[`infocard_prior_week_${w}_raw`] = allIds.length;
       } catch(e){ /* skip */ }
     }
   }
@@ -2865,6 +2875,9 @@ async function syncInfocards(){
   const details = [];
   const unknownAuthors = new Set();
 
+  // Process in batches of 25 — parallel within batch, sequential between batches
+  // This avoids stack overflow from too many simultaneous requests
+  // while still being fast enough for 1000+ IDs
   for(let i=0; i<uniqueIds.length; i+=BATCH){
     const batch = uniqueIds.slice(i, i+BATCH);
     const results = await Promise.allSettled(
@@ -2935,7 +2948,13 @@ async function syncInfocards(){
 
         // Only keep infocards completed within our 4-week tracking window
         const fourWeeksAgo = new Date(); fourWeeksAgo.setDate(fourWeeksAgo.getDate()-28);
-        if(releaseDateNorm && new Date(releaseDateNorm) < fourWeeksAgo) return;
+        if(releaseDateNorm && new Date(releaseDateNorm) < fourWeeksAgo){
+          // Debug: count filtered-out records by subtype
+          const filtSubtype = d.infocardTypeName||'';
+          _diag['infocard_filtered_old'] = _diag['infocard_filtered_old'] || {};
+          _diag['infocard_filtered_old'][filtSubtype] = (_diag['infocard_filtered_old'][filtSubtype]||0)+1;
+          return;
+        }
 
         details.push({
           id:           d.infocardId || d.id || '',
