@@ -1870,6 +1870,71 @@ function renderKPIs(){
     }).join('')}
   </div>
 
+  <!-- Metrics cards: Started, Cycle Time, WF Cycle Time -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:18px">
+
+    <!-- Metric 1: Tasks Started -->
+    <div class="card">
+      <div class="card-title">Tasks Started This Week</div>
+      <div class="card-subtitle">Unique packets launched · MC launchdate</div>
+      <div style="margin-top:10px">
+        ${(() => {
+          const started = getTasksStarted(wkStart, wkEnd);
+          const byAuthor = countStartedByAuthor(wkStart, wkEnd);
+          const color = started.length > 0 ? 'var(--accent)' : 'var(--text-muted)';
+          return '<div style="font-size:28px;font-weight:600;color:'+color+'">'+started.length+'</div>'
+            + '<div style="font-size:11px;color:var(--text-subtle);margin-bottom:8px">unique packets</div>'
+            + (Object.keys(byAuthor).length ? '<table class="data-table"><thead><tr><th>Author</th><th style="text-align:right">Started</th></tr></thead><tbody>'
+              + Object.entries(byAuthor).sort((a,b)=>b[1]-a[1]).map(([n,c])=>
+                  '<tr><td style="font-size:12px">'+n+'</td><td style="text-align:right;font-weight:500">'+c+'</td></tr>'
+                ).join('')
+              + '</tbody></table>'
+            : '<div class="text-sm text-muted">No packets launched this week</div>');
+        })()}
+      </div>
+    </div>
+
+    <!-- Metric 2: MC Cycle Time -->
+    <div class="card">
+      <div class="card-title">MC Cycle Time</div>
+      <div class="card-subtitle">createDate → releaseDate · SLA: ${CYCLE_SLA_DAYS} days</div>
+      <div style="margin-top:10px">
+        ${(() => {
+          const dist = cycleTimeDistribution();
+          if(!dist.total) return '<div class="text-sm text-muted">No cycle time data yet — needs both createDate and releaseDate on infocards</div>';
+          const avgColor = dist.avg <= CYCLE_SLA_DAYS ? 'var(--success)' : dist.avg <= 60 ? 'var(--warning)' : 'var(--danger)';
+          return '<div style="font-size:28px;font-weight:600;color:'+avgColor+'">'+(dist.avg||'—')+'<span style="font-size:14px;font-weight:400;color:var(--text-muted)"> days avg</span></div>'
+            + '<div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap">'
+            + '<span style="font-size:11px;padding:2px 8px;border-radius:3px;background:var(--success-bg);color:var(--success)">✓ '+dist.onTime+' on time</span>'
+            + (dist.warning?'<span style="font-size:11px;padding:2px 8px;border-radius:3px;background:var(--warning-bg);color:var(--warning)">⚠ '+dist.warning+' at risk</span>':'')
+            + (dist.late?'<span style="font-size:11px;padding:2px 8px;border-radius:3px;background:var(--danger-bg);color:var(--danger)">✗ '+dist.late+' overdue</span>':'')
+            + '</div>'
+            + '<div style="font-size:11px;color:var(--text-subtle)">'+dist.total+' infocards with cycle data</div>';
+        })()}
+      </div>
+    </div>
+
+    <!-- Metric 3: WF Cycle Time -->
+    <div class="card">
+      <div class="card-title">WF Task Cycle Time</div>
+      <div class="card-subtitle">Actual Start → Completion · spec tasks only</div>
+      <div style="margin-top:10px">
+        ${(() => {
+          const dist = wfCycleTimeDistribution();
+          if(!dist.total) return '<div class="text-sm text-muted">No WF cycle data — needs Actual Start Date and Completion Date in import</div>';
+          const avgColor = dist.avg <= 30 ? 'var(--success)' : dist.avg <= 60 ? 'var(--warning)' : 'var(--danger)';
+          return '<div style="font-size:28px;font-weight:600;color:'+avgColor+'">'+(dist.avg||'—')+'<span style="font-size:14px;font-weight:400;color:var(--text-muted)"> days avg</span></div>'
+            + '<div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap">'
+            + '<span style="font-size:11px;padding:2px 8px;border-radius:3px;background:var(--success-bg);color:var(--success)">≤30d: '+dist.under30+'</span>'
+            + '<span style="font-size:11px;padding:2px 8px;border-radius:3px;background:var(--warning-bg);color:var(--warning)">31-60d: '+dist.under60+'</span>'
+            + '<span style="font-size:11px;padding:2px 8px;border-radius:3px;background:var(--danger-bg);color:var(--danger)">>60d: '+dist.over60+'</span>'
+            + '</div>'
+            + '<div style="font-size:11px;color:var(--text-subtle)">'+dist.total+' completed spec tasks</div>';
+        })()}
+      </div>
+    </div>
+  </div>
+
   <!-- Granular breakdown table — all Router task types -->
   <div class="full-row card">
     <div class="card-header">
@@ -1915,6 +1980,70 @@ function renderKPIs(){
 
 // ── SCHEDULE PAGE ──
 // ── MEMBER SCHEDULE CARD (shown on individual pages) ──
+// ── MEMBER METRICS CARD ──────────────────────────────────────────
+function renderMemberMetrics(name){
+  const mcAvg  = avgCycleTime(name);
+  const wfAvg  = avgWFCycleTime(name);
+  const { start: wkStart, end: wkEnd } = thisWeekRange();
+  const started = getTasksStarted(wkStart, wkEnd).filter(t =>
+    t.author && normName(t.author) === normName(name)
+  ).length;
+
+  // Only show if we have at least one metric
+  if(mcAvg === null && wfAvg === null && started === 0) return '';
+
+  const mcColor  = mcAvg === null ? 'var(--text-muted)' : mcAvg <= CYCLE_SLA_DAYS ? 'var(--success)' : mcAvg <= 60 ? 'var(--warning)' : 'var(--danger)';
+  const wfColor  = wfAvg === null ? 'var(--text-muted)' : wfAvg <= 30 ? 'var(--success)' : wfAvg <= 60 ? 'var(--warning)' : 'var(--danger)';
+
+  // Get recent cycle time details for this person
+  const recentCycles = getCycleTimes(name)
+    .sort((a,b)=>new Date(b.releaseDate)-new Date(a.releaseDate))
+    .slice(0,5);
+
+  return `
+  <div class="full-row card" style="margin-bottom:14px">
+    <div class="card-header">
+      <div><div class="card-title">Performance Metrics</div>
+      <div class="card-subtitle">Cycle times · tasks started</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:${recentCycles.length?'14px':'0'}">
+      <div style="text-align:center;padding:12px;background:var(--surface2);border-radius:var(--radius-sm)">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--text-subtle);margin-bottom:6px">Started This Week</div>
+        <div style="font-size:28px;font-weight:600;color:var(--accent)">${started}</div>
+        <div style="font-size:11px;color:var(--text-subtle)">packets launched</div>
+      </div>
+      <div style="text-align:center;padding:12px;background:var(--surface2);border-radius:var(--radius-sm)">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--text-subtle);margin-bottom:6px">MC Cycle Time</div>
+        <div style="font-size:28px;font-weight:600;color:${mcColor}">${mcAvg !== null ? mcAvg+'d' : '—'}</div>
+        <div style="font-size:11px;color:var(--text-subtle)">avg · SLA ${CYCLE_SLA_DAYS}d</div>
+      </div>
+      <div style="text-align:center;padding:12px;background:var(--surface2);border-radius:var(--radius-sm)">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--text-subtle);margin-bottom:6px">WF Cycle Time</div>
+        <div style="font-size:28px;font-weight:600;color:${wfColor}">${wfAvg !== null ? wfAvg+'d' : '—'}</div>
+        <div style="font-size:11px;color:var(--text-subtle)">avg · spec tasks</div>
+      </div>
+    </div>
+    ${recentCycles.length ? `
+    <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--text-subtle);margin-bottom:6px">Recent Cycle Times</div>
+    <table class="data-table">
+      <thead><tr><th>Document</th><th>Subtype</th><th style="text-align:right">Days</th><th>SLA</th><th>Released</th></tr></thead>
+      <tbody>
+        ${recentCycles.map(i => {
+          const slaColor = i.slaStatus==='green'?'var(--success)':i.slaStatus==='yellow'?'var(--warning)':'var(--danger)';
+          const slaLabel = i.slaStatus==='green'?'On time':i.slaStatus==='yellow'?'At risk':'Overdue';
+          return '<tr>'
+            + '<td style="font-size:12px">'+(i.title||i.number||'—')+'</td>'
+            + '<td class="text-xs text-muted">'+(i.subtype||'—')+'</td>'
+            + '<td style="text-align:right;font-weight:600;color:'+slaColor+'">'+i.cycleDays+'</td>'
+            + '<td><span style="font-size:10px;padding:2px 6px;border-radius:3px;background:'+slaColor+'20;color:'+slaColor+'">'+slaLabel+'</span></td>'
+            + '<td style="font-size:12px;color:var(--text-muted)">'+formatDate(i.releaseDate)+'</td>'
+            + '</tr>';
+        }).join('')}
+      </tbody>
+    </table>` : ''}
+  </div>`;
+}
+
 function renderMemberSchedule(name){
   const thisWeekStart = getWeekDates(0);
   const wk = getScheduleWeek(thisWeekStart);
@@ -2497,6 +2626,7 @@ function renderMember(name){
 
   ${renderMemberSchedule(name)}
   ${renderMemberInfocards(name)}
+  ${renderMemberMetrics(name)}
 
   <div class="full-row card">
     <div class="card-header">
@@ -3290,6 +3420,156 @@ function rebuildScheduleData(){
     });
   });
   state.scheduleData = assignments;
+}
+
+// ─────────────────────────────────────────────
+// METRICS ENGINE
+// Three tracked metrics beyond simple task counts:
+//   1. Tasks Started   — packets launched this week (MC task launchdate)
+//   2. Cycle Time      — createDate → releaseDate on infocards (45-day SLA)
+//   3. WF Cycle Time   — Actual Start → Completion on WF tasks
+// ─────────────────────────────────────────────
+
+// Parse MC date string: "March, 31 2026 16:13:59 +0000"
+function parseMCDate(str){
+  if(!str) return null;
+  try{
+    // Handle "Month, DD YYYY HH:MM:SS +0000" format
+    const clean = str.replace(/,/,'');
+    return new Date(clean);
+  } catch(e){ return null; }
+}
+
+// ── METRIC 1: Tasks Started ──────────────────────────────────────
+// Count unique packets launched within a date range, by route type
+// Deduplicates by packetid, attributed via infocard author cross-reference
+
+function getTasksStarted(startDate, endDate){
+  const tasks = state.mcData?.docTasks || [];
+  const seenPackets = new Set();
+  const started = [];
+
+  tasks.forEach(t => {
+    if(!t.launchdate || !t.packetid) return;
+    if(seenPackets.has(t.packetid)) return;
+    const d = parseMCDate(t.launchdate);
+    if(!d || d < startDate || d > endDate) return;
+    seenPackets.add(t.packetid);
+
+    // Classify by route name
+    const route = t.routename || t.workflow || '';
+    let kpiId = null;
+    if(/spec.*dept.*approv/i.test(route))  kpiId = 'r_as';   // specs
+    else if(/spec.*qa.*approv/i.test(route)) kpiId = 'r_mcu'; // artwork
+    else if(/change\s*control/i.test(route)) kpiId = 'cc';
+    else if(/dcr.*training|sop|work\s*instruction/i.test(route)) kpiId = 'sop';
+
+    // Try to find author via infocard cross-reference by title match
+    const infocard = (state.infocardData?.items||[]).find(i =>
+      i.title && t.name && normName(i.title.slice(0,20)) === normName(t.name.slice(0,20))
+    );
+    const author = infocard?.author || null;
+
+    started.push({
+      packetid:   t.packetid,
+      name:       t.name || '',
+      route,
+      kpiId,
+      author,
+      launchdate: d,
+      assignee:   t.assignee || '',
+    });
+  });
+
+  return started;
+}
+
+function countStartedByKPI(kpiId, startDate, endDate){
+  return getTasksStarted(startDate, endDate).filter(t => t.kpiId === kpiId).length;
+}
+
+function countStartedByAuthor(startDate, endDate){
+  const byAuthor = {};
+  getTasksStarted(startDate, endDate).forEach(t => {
+    const name = t.author || 'Unknown';
+    byAuthor[name] = (byAuthor[name]||0) + 1;
+  });
+  return byAuthor;
+}
+
+// ── METRIC 2: Cycle Time (MC createDate → releaseDate) ───────────
+const CYCLE_SLA_DAYS = 45;
+
+function getCycleTimes(authorName){
+  return (state.infocardData?.items||[])
+    .filter(i => {
+      if(!i.createDate || !i.releaseDate) return false;
+      if(authorName && normName(i.author) !== normName(authorName)) return false;
+      return true;
+    })
+    .map(i => {
+      const created  = new Date(i.createDate);
+      const released = new Date(i.releaseDate);
+      const days = Math.round((released - created) / 86400000);
+      const status = days <= CYCLE_SLA_DAYS ? 'green'
+                   : days <= 60            ? 'yellow' : 'red';
+      return { ...i, cycleDays: days, slaStatus: status };
+    });
+}
+
+function avgCycleTime(authorName){
+  const times = getCycleTimes(authorName);
+  if(!times.length) return null;
+  return Math.round(times.reduce((s,t) => s+t.cycleDays, 0) / times.length);
+}
+
+function cycleTimeDistribution(){
+  const all = getCycleTimes();
+  return {
+    total:   all.length,
+    onTime:  all.filter(t=>t.slaStatus==='green').length,
+    warning: all.filter(t=>t.slaStatus==='yellow').length,
+    late:    all.filter(t=>t.slaStatus==='red').length,
+    avg:     all.length ? Math.round(all.reduce((s,t)=>s+t.cycleDays,0)/all.length) : null,
+  };
+}
+
+// ── METRIC 3: WF Task Cycle Time (Actual Start → Completion) ─────
+function getWFCycleTimes(authorName){
+  const tasks = [
+    ...(state.wfData?.tasks||[]),
+    ...(state.wfData?.projects||[]),
+  ].filter(t => {
+    if(t.status !== 'completed') return false;
+    if(!t.plannedStart || !t.completedDate) return false;
+    // Only spec-type tasks
+    if(!/AS-\d{5}|FPS|FP\s*spec|FGT|OTS|BS-\d|PBS-\d|assembly\s*spec|finished\s*product/i.test(t.title||'')) return false;
+    if(authorName && normName(t.assignee) !== normName(authorName)) return false;
+    return true;
+  }).map(t => {
+    const start = new Date(t.plannedStart);
+    const end   = new Date(t.completedDate);
+    const days  = Math.round((end - start) / 86400000);
+    return { ...t, cycleDays: Math.max(0, days) };
+  });
+  return tasks;
+}
+
+function avgWFCycleTime(authorName){
+  const times = getWFCycleTimes(authorName);
+  if(!times.length) return null;
+  return Math.round(times.reduce((s,t)=>s+t.cycleDays,0)/times.length);
+}
+
+function wfCycleTimeDistribution(){
+  const all = getWFCycleTimes();
+  return {
+    total: all.length,
+    avg:   all.length ? Math.round(all.reduce((s,t)=>s+t.cycleDays,0)/all.length) : null,
+    under30: all.filter(t=>t.cycleDays<=30).length,
+    under60: all.filter(t=>t.cycleDays>30&&t.cycleDays<=60).length,
+    over60:  all.filter(t=>t.cycleDays>60).length,
+  };
 }
 
 // ─────────────────────────────────────────────
