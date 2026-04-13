@@ -3450,14 +3450,17 @@ function getTasksStarted(startDate, endDate){
   const started = [];
 
   tasks.forEach(t => {
-    if(!t.launchdate || !t.packetid) return;
-    if(seenPackets.has(t.packetid)) return;
-    const d = parseMCDate(t.launchdate);
-    if(!d || d < startDate || d > endDate) return;
-    seenPackets.add(t.packetid);
+    // mapSoapTask stores launchDate (capital D) and uses id for packetid
+    const launchRaw = t.launchDate || t.launchdate;
+    const packetId  = t.id || t.packetid;
+    if(!launchRaw || !packetId) return;
+    if(seenPackets.has(packetId)) return;
+    const d = parseMCDate(launchRaw) || new Date(launchRaw);
+    if(!d || isNaN(d) || d < startDate || d > endDate) return;
+    seenPackets.add(packetId);
 
-    // Classify by route name
-    const route = t.routename || t.workflow || '';
+    // Classify by route name — mapSoapTask stores as t.workflow
+    const route = t.workflow || t.routename || '';
     let kpiId = null;
     if(/spec.*dept.*approv/i.test(route))  kpiId = 'r_as';   // specs
     else if(/spec.*qa.*approv/i.test(route)) kpiId = 'r_mcu'; // artwork
@@ -3471,8 +3474,8 @@ function getTasksStarted(startDate, endDate){
     const author = infocard?.author || null;
 
     started.push({
-      packetid:   t.packetid,
-      name:       t.name || '',
+      packetid:   packetId,
+      name:       t.title || '',
       route,
       kpiId,
       author,
