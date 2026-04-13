@@ -2737,7 +2737,10 @@ const INFOCARD_TYPE_MAP = [
   { match: /^Job Description$/i,               category:'SOP/Work Instructions', kpiId:'man',    tracked:true  },
   // ── Specifications — Visible but not team KPI ─────────────────────
   { match: /^3rd Party Mfg Pack Spec$/i,       category:'Specifications',        kpiId:'fps',    tracked:true  },
-  { match: /^Oil Packaging Spec$/i,            category:'Specifications',        kpiId:null,     tracked:true  },
+  { match: /^Packaging BOM Spec$/i,            category:'Specifications',        kpiId:'g_pbs',  tracked:true  },
+  { match: /^Pilot Spec$/i,                      category:'Specifications',        kpiId:'fps',    tracked:true  },
+  { match: /^Component Spec$/i,                  category:'Specifications',        kpiId:'g_cs',   tracked:true  },
+  { match: /^Oil Packaging Spec$/i,              category:'Specifications',        kpiId:null,     tracked:true  },
   { match: /^OL Packaging Spec$/i,             category:'Specifications',        kpiId:null,     tracked:true  },
   { match: /^PLF Good Testing Spec$/i,         category:'Specifications',        kpiId:null,     tracked:true  },
   { match: /^RMS - (Blend|Single)$/i,          category:'Specifications',        kpiId:null,     tracked:true  },
@@ -3509,20 +3512,30 @@ function exportView(){
     exportToCSV(rows, `all-tasks-${now}.csv`);
 
   } else if(v === 'kpis'){
-    const rules = getKPIRules();
-    const { start, end } = thisWeekRange();
-    const rows = rules.map(rule => {
-      const actual = countKPITasks(rule, start, end);
-      const byP    = countKPIByPersonSummary(rule, start, end);
+    // Use the active KPI week tab's date range, not just the current week
+    const kpiWeekTab = parseInt(sessionStorage.getItem('kpi_week_tab')||'0');
+    const tabWeekStart = getWeekDates(-kpiWeekTab);
+    const wkStart = new Date(tabWeekStart);
+    const wkEnd   = new Date(wkStart); wkEnd.setDate(wkStart.getDate()+6); wkEnd.setHours(23,59,59,0);
+    const weekLbl = weekLabel(tabWeekStart);
+
+    // Export granular rules for the full breakdown matching MC report
+    const rows = getEffectiveGranularRules().filter(r=>!r.disabled).map(rule => {
+      const actual  = countGranularKPI(rule, wkStart, wkEnd);
+      const target  = getGranularTarget(rule);
+      const byP     = countGranularKPIByPerson(rule, wkStart, wkEnd);
       return {
-        KPI: rule.label,
-        Category: rule.category,
-        Target: rule.target,
+        Week: weekLbl,
+        'Task Type': rule.label,
+        Role: rule.role,
+        Target: target,
         Actual: actual,
-        'Pct of Target': Math.round(actual/rule.target*100)+'%',
+        'Pct of Target': target>0 ? Math.round(actual/target*100)+'%' : '—',
         'By Person': Object.entries(byP).map(([k,v])=>k+':'+v).join('; '),
         'Hrs per Task': rule.hrs,
-        'Est Hours': (actual*rule.hrs).toFixed(1),
+        'Actual Hours': (actual*rule.hrs).toFixed(1),
+        'Est Hours': (target*rule.hrs).toFixed(1),
+        Source: rule.infocardMatch&&rule.wfMatch?'MC+WF':rule.infocardMatch?'MC':'WF',
       };
     });
     exportToCSV(rows, `kpis-${now}.csv`);
